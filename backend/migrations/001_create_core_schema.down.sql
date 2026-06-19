@@ -1,0 +1,6 @@
+DROP TABLE IF EXISTS chat_messages;
+DROP TABLE IF EXISTS jobs;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS ride_groups;
+DROP TABLE IF EXISTS ride_requests;
+DROP TABLE IF EXISTS drivers;

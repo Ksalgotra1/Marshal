@@ -1,0 +1,25 @@
+# Binaries
+bin/
+*.exe
+
+# Environment
+.env
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Go
+vendor/
+*.test
+coverage.out
+coverage.html
+
+# Documents (reference material, not source code)
+documents/
+
+# Temp
+tmp/

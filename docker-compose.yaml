@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: marshal_db
+    environment:
+      POSTGRES_USER: marshal
+      POSTGRES_PASSWORD: marshal_secret
+      POSTGRES_DB: marshal_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - marshal_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marshal -d marshal_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  marshal_data:
