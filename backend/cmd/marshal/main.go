@@ -9,7 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Ksalgotra1/Marshal/internal/api"
 	"github.com/Ksalgotra1/Marshal/internal/config"
+	"github.com/Ksalgotra1/Marshal/internal/handlers"
 )
 
 func main() {
@@ -26,15 +28,32 @@ func main() {
 	}
 	defer pool.Close()
 
+	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx}
+
 	mux := http.NewServeMux()
+
+	// Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		api.WriteJSON(w, http.StatusOK, api.JSON{"status": "ok"})
 	})
 
+	// Ride requests
+	mux.HandleFunc("POST /api/requests", h.HandleCreateRequest)
+	mux.HandleFunc("GET /api/requests/{id}", h.HandleGetRequest)
+
+	// Groups
+	mux.HandleFunc("GET /api/groups", h.HandleListGroups)
+	mux.HandleFunc("GET /api/groups/open", h.HandleListOpenGroups)
+	mux.HandleFunc("POST /api/groups/{id}/join", h.HandleJoinGroup)
+
+	// Apply middleware stack
+	stack := api.RequestIDMiddleware(api.CORSMiddleware(mux))
+
 	server := &http.Server{
-		Addr:    ":" + cfg.Port,
-		Handler: mux,
+		Addr:         ":" + cfg.Port,
+		Handler:      stack,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
 	}
 
 	// Graceful shutdown
