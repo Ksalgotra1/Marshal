@@ -5,21 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/api"
-	"github.com/Ksalgotra1/Marshal/internal/grouper"
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/store"
+	"github.com/Ksalgotra1/Marshal/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Handlers bundles all HTTP handler dependencies.
 type Handlers struct {
-	Pool    *pgxpool.Pool
-	// ServerCtx is the server's root context (cancelled on SIGTERM).
-	// Use this for background goroutines — it survives client disconnects
-	// but is cleaned up on graceful shutdown.
+	Pool      *pgxpool.Pool
 	ServerCtx context.Context
 }
 
@@ -56,9 +54,10 @@ func (h *Handlers) HandleCreateRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fire the grouper on the server's root context — not r.Context() (cancelled on
-	// client disconnect) and not context.Background() (never cancellable).
-	go (&grouper.Engine{Pool: h.Pool}).Run(h.ServerCtx)
+	// Enqueue a grouper job and wake the worker via Postgres NOTIFY
+	js := &store.JobStore{DB: h.Pool}
+	js.Enqueue(r.Context(), "group_pending", struct{}{}, time.Now())
+	worker.Notify(r.Context(), h.Pool, "grouper_wakeup")
 
 	api.WriteJSON(w, http.StatusCreated, api.JSON{
 		"id":     id,
@@ -78,15 +77,34 @@ func (h *Handlers) HandleGetRequest(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, http.StatusOK, req)
 }
 
-// HandleListGroups handles GET /api/groups (admin — all groups, highest score first).
+// HandleListGroups handles GET /api/groups with optional ?status= and ?limit= filters.
 func (h *Handlers) HandleListGroups(w http.ResponseWriter, r *http.Request) {
+	filter := store.GroupFilter{
+		Status: r.URL.Query().Get("status"),
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		filter.Limit, _ = strconv.Atoi(l)
+	}
+
 	s := &store.GroupStore{DB: h.Pool}
-	groups, err := s.ListAll(r.Context())
+	groups, err := s.ListFiltered(r.Context(), filter)
 	if err != nil {
 		api.WriteError(w, http.StatusInternalServerError, "failed to list groups")
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, groups)
+}
+
+// HandleGetGroup handles GET /api/groups/{id} — returns group + its member details.
+func (h *Handlers) HandleGetGroup(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	s := &store.GroupStore{DB: h.Pool}
+	detail, err := s.GetByIDWithMembers(r.Context(), id)
+	if err != nil {
+		api.WriteError(w, http.StatusNotFound, "group not found")
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, detail)
 }
 
 // HandleListOpenGroups handles GET /api/groups/open (student browse).

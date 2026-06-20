@@ -3,10 +3,17 @@ package store
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/models"
 )
+
+// GroupFilter holds query parameters for filtered group listing.
+type GroupFilter struct {
+	Status string // filter by status (empty = all)
+	Limit  int    // max results (0 = default 20, max 100)
+}
 
 // GroupStore handles ride group CRUD operations.
 type GroupStore struct{ DB DBTX }
@@ -66,16 +73,30 @@ func (s *GroupStore) ListOpen(ctx context.Context) ([]models.RideGroup, error) {
 	return scanGroups(rows)
 }
 
-// ListAll returns every group (for admin view), highest score first.
-func (s *GroupStore) ListAll(ctx context.Context) ([]models.RideGroup, error) {
-	rows, err := s.DB.Query(ctx, `
-		SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
-		       dispatch_attempts, telegram_msg_id, created_at, updated_at
-		FROM ride_groups
-		ORDER BY confidence_score DESC, created_at DESC
-	`)
+// ListFiltered returns groups with optional status filter and limit.
+func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.RideGroup, error) {
+	if f.Limit <= 0 || f.Limit > 100 {
+		f.Limit = 20
+	}
+
+	query := `SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
+	                 dispatch_attempts, telegram_msg_id, created_at, updated_at
+	          FROM ride_groups`
+	args := []any{}
+	argIdx := 1
+
+	if f.Status != "" {
+		query += ` WHERE status = $` + strconv.Itoa(argIdx)
+		args = append(args, f.Status)
+		argIdx++
+	}
+
+	query += ` ORDER BY confidence_score DESC, created_at DESC LIMIT $` + strconv.Itoa(argIdx)
+	args = append(args, f.Limit)
+
+	rows, err := s.DB.Query(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("GroupStore.ListAll: %w", err)
+		return nil, fmt.Errorf("GroupStore.ListFiltered: %w", err)
 	}
 	defer rows.Close()
 	return scanGroups(rows)
@@ -94,6 +115,74 @@ func (s *GroupStore) GetByID(ctx context.Context, id string) (*models.RideGroup,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("GroupStore.GetByID: %w", err)
+	}
+	return &g, nil
+}
+
+// GroupDetail is the enriched response for GET /api/groups/{id}.
+type GroupDetail struct {
+	Group   models.RideGroup   `json:"group"`
+	Members []models.RideRequest `json:"members"`
+}
+
+// GetByIDWithMembers fetches a group and all its member ride requests in one call.
+func (s *GroupStore) GetByIDWithMembers(ctx context.Context, id string) (*GroupDetail, error) {
+	group, err := s.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.DB.Query(ctx, `
+		SELECT rr.id, rr.requester_name, rr.pickup_lat, rr.pickup_lng,
+		       rr.dropoff_lat, rr.dropoff_lng, rr.pickup_h3, rr.dropoff_h3,
+		       rr.arrive_by, rr.status, rr.created_at, rr.updated_at
+		FROM ride_requests rr
+		JOIN group_members gm ON rr.id = gm.request_id
+		WHERE gm.group_id = $1
+	`, id)
+	if err != nil {
+		return nil, fmt.Errorf("GroupStore.GetByIDWithMembers members: %w", err)
+	}
+	defer rows.Close()
+
+	var members []models.RideRequest
+	for rows.Next() {
+		var r models.RideRequest
+		if err := rows.Scan(
+			&r.ID, &r.RequesterName, &r.PickupLat, &r.PickupLng,
+			&r.DropoffLat, &r.DropoffLng, &r.PickupH3, &r.DropoffH3,
+			&r.ArriveBy, &r.Status, &r.CreatedAt, &r.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("GroupStore.GetByIDWithMembers scan: %w", err)
+		}
+		members = append(members, r)
+	}
+
+	return &GroupDetail{Group: *group, Members: members}, nil
+}
+
+// PopHighestScore atomically grabs the highest-scoring unassigned group.
+// This IS the priority queue pop — the partial B-tree index makes it O(log n).
+// Returns nil if no groups are available.
+func (s *GroupStore) PopHighestScore(ctx context.Context) (*models.RideGroup, error) {
+	var g models.RideGroup
+	err := s.DB.QueryRow(ctx, `
+		SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
+		       dispatch_attempts, telegram_msg_id, created_at, updated_at
+		FROM ride_groups
+		WHERE status = 'grouped' AND driver_id IS NULL
+		ORDER BY confidence_score DESC
+		LIMIT 1
+		FOR UPDATE SKIP LOCKED
+	`).Scan(
+		&g.ID, &g.Status, &g.ConfidenceScore, &g.ArriveBy, &g.ExpectedDeparture,
+		&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
+	)
+	if err != nil {
+		if err.Error() == "no rows in result set" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("GroupStore.PopHighestScore: %w", err)
 	}
 	return &g, nil
 }
