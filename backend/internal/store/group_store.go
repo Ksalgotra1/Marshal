@@ -236,6 +236,69 @@ func (s *GroupStore) UpdateScore(ctx context.Context, groupID string, score floa
 	return err
 }
 
+// MarkDispatching transitions a group from 'grouped' to 'dispatching' and increments attempts.
+// Called by the assigner after popping from the priority queue.
+func (s *GroupStore) MarkDispatching(ctx context.Context, groupID string) error {
+	_, err := s.DB.Exec(ctx, `
+		UPDATE ride_groups
+		SET status = 'dispatching', dispatch_attempts = dispatch_attempts + 1, updated_at = NOW()
+		WHERE id = $1
+	`, groupID)
+	return err
+}
+
+// ClaimGroup atomically assigns a driver to a dispatching group.
+// Returns rows affected: 1 = success, 0 = race lost (someone else claimed it).
+// This is the concurrency-safe ACK — FOR UPDATE is implicit via the WHERE clause.
+func (s *GroupStore) ClaimGroup(ctx context.Context, groupID, driverID string) (int64, error) {
+	cmd, err := s.DB.Exec(ctx, `
+		UPDATE ride_groups
+		SET status = 'assigned', driver_id = $1, updated_at = NOW()
+		WHERE id = $2 AND status = 'dispatching' AND driver_id IS NULL
+	`, driverID, groupID)
+	if err != nil {
+		return 0, fmt.Errorf("GroupStore.ClaimGroup: %w", err)
+	}
+	return cmd.RowsAffected(), nil
+}
+
+// RevertTimedOut reverts groups stuck in 'dispatching' past the given timeout back to 'grouped'.
+// Returns the IDs of reverted groups so the assigner can re-dispatch them.
+func (s *GroupStore) RevertTimedOut(ctx context.Context, timeout time.Duration) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `
+		UPDATE ride_groups
+		SET status = 'grouped', updated_at = NOW()
+		WHERE status = 'dispatching' AND updated_at < NOW() - $1::interval
+		  AND dispatch_attempts < 3
+		RETURNING id
+	`, timeout.String())
+	if err != nil {
+		return nil, fmt.Errorf("GroupStore.RevertTimedOut: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
+// CancelMaxRetries marks groups that have exceeded max dispatch attempts as 'cancelled'.
+func (s *GroupStore) CancelMaxRetries(ctx context.Context) (int64, error) {
+	cmd, err := s.DB.Exec(ctx, `
+		UPDATE ride_groups
+		SET status = 'cancelled', updated_at = NOW()
+		WHERE status = 'dispatching' AND dispatch_attempts >= 3
+	`)
+	if err != nil {
+		return 0, err
+	}
+	return cmd.RowsAffected(), nil
+}
+
 func scanGroups(rows interface {
 	Next() bool
 	Scan(...any) error

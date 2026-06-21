@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
+	"github.com/Ksalgotra1/Marshal/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -19,6 +21,7 @@ import (
 type Handlers struct {
 	Pool      *pgxpool.Pool
 	ServerCtx context.Context
+	Hub       *ws.Hub
 }
 
 // HandleCreateRequest handles POST /api/requests.
@@ -177,3 +180,96 @@ func validatePayload(p *models.CreateRequestPayload) error {
 	}
 	return nil
 }
+
+// ─── Driver Handlers ────────────────────────────────────────────────────────
+
+// HandleRegisterDriver handles POST /api/drivers.
+func (h *Handlers) HandleRegisterDriver(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name       string `json:"name"`
+		TelegramID int64  `json:"telegram_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" || body.TelegramID == 0 {
+		api.WriteError(w, http.StatusBadRequest, "name and telegram_id are required")
+		return
+	}
+
+	ds := &store.DriverStore{DB: h.Pool}
+	id, err := ds.Register(r.Context(), body.Name, body.TelegramID)
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, "failed to register driver")
+		return
+	}
+
+	api.WriteJSON(w, http.StatusCreated, api.JSON{"id": id, "name": body.Name})
+}
+
+// HandleListDrivers handles GET /api/drivers (admin view).
+func (h *Handlers) HandleListDrivers(w http.ResponseWriter, r *http.Request) {
+	ds := &store.DriverStore{DB: h.Pool}
+	drivers, err := ds.List(r.Context())
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, "failed to list drivers")
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, drivers)
+}
+
+// ─── Claim Handler ──────────────────────────────────────────────────────────
+
+// HandleClaimGroup handles POST /api/groups/{id}/claim.
+// A driver claims a dispatching group. Row-level WHERE guard ensures only one wins.
+// Returns 409 Conflict if the group was already claimed or is not in 'dispatching' state.
+func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+
+	var body struct {
+		DriverID string `json:"driver_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.DriverID == "" {
+		api.WriteError(w, http.StatusBadRequest, "driver_id is required")
+		return
+	}
+
+	gs := &store.GroupStore{DB: h.Pool}
+	rowsAffected, err := gs.ClaimGroup(r.Context(), groupID, body.DriverID)
+	if err != nil {
+		api.WriteError(w, http.StatusInternalServerError, "claim failed")
+		return
+	}
+
+	if rowsAffected == 0 {
+		api.WriteError(w, http.StatusConflict, "group already claimed or not available")
+		return
+	}
+
+	// Mark driver as busy
+	ds := &store.DriverStore{DB: h.Pool}
+	ds.SetStatus(r.Context(), body.DriverID, "busy")
+
+	// Look up driver name for the event
+	driverName := "unknown"
+	if driver, err := ds.GetByID(r.Context(), body.DriverID); err == nil {
+		driverName = driver.Name
+	}
+
+	slog.Info("driver claimed group", "group_id", groupID, "driver_id", body.DriverID)
+
+	// Broadcast assignment event
+	if h.Hub != nil {
+		event := ws.GroupAssigned(groupID, body.DriverID, driverName)
+		h.Hub.BroadcastMulti([]string{"global", groupID}, event)
+	}
+
+	api.WriteJSON(w, http.StatusOK, api.JSON{
+		"claimed":   true,
+		"group_id":  groupID,
+		"driver_id": body.DriverID,
+	})
+}
+
+// HandleWebSocket upgrades HTTP to WebSocket. Query: ?room=global or ?room={group_id}
+func (h *Handlers) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	h.Hub.HandleUpgrade(w, r)
+}
+

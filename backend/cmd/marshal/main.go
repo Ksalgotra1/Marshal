@@ -10,10 +10,13 @@ import (
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/api"
+	"github.com/Ksalgotra1/Marshal/internal/assigner"
 	"github.com/Ksalgotra1/Marshal/internal/config"
 	"github.com/Ksalgotra1/Marshal/internal/grouper"
 	"github.com/Ksalgotra1/Marshal/internal/handlers"
+	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
+	"github.com/Ksalgotra1/Marshal/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -31,14 +34,18 @@ func main() {
 	}
 	defer pool.Close()
 
-	// Start background workers — each LISTEN on a Postgres channel for instant wakeup
+	// WebSocket hub — manages rooms + broadcasts events
+	hub := ws.NewHub()
+	go hub.Run()
+
+	// Start background workers
 	go worker.Run(ctx, worker.Config{
 		Name:     "grouper",
 		JobType:  "group_pending",
 		Channel:  "grouper_wakeup",
-		Interval: 30 * time.Second, // safety-net fallback (LISTEN/NOTIFY is primary)
+		Interval: 30 * time.Second,
 		Pool:     pool,
-		Process:  grouperProcess(pool),
+		Process:  grouperProcess(pool, hub),
 	})
 
 	go worker.Run(ctx, worker.Config{
@@ -47,17 +54,23 @@ func main() {
 		Channel:  "assigner_wakeup",
 		Interval: 30 * time.Second,
 		Pool:     pool,
-		Process:  assignerProcess,
+		Process:  assigner.NewProcess(hub),
 	})
 
-	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx}
+	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx, Hub: hub}
 
 	mux := http.NewServeMux()
 
 	// Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		api.WriteJSON(w, http.StatusOK, api.JSON{"status": "ok"})
+		api.WriteJSON(w, http.StatusOK, api.JSON{
+			"status":      "ok",
+			"connections": hub.ConnectionCount(),
+		})
 	})
+
+	// WebSocket
+	mux.HandleFunc("GET /ws", h.HandleWebSocket)
 
 	// Ride requests
 	mux.HandleFunc("POST /api/requests", h.HandleCreateRequest)
@@ -68,6 +81,11 @@ func main() {
 	mux.HandleFunc("GET /api/groups/open", h.HandleListOpenGroups)
 	mux.HandleFunc("GET /api/groups/{id}", h.HandleGetGroup)
 	mux.HandleFunc("POST /api/groups/{id}/join", h.HandleJoinGroup)
+	mux.HandleFunc("POST /api/groups/{id}/claim", h.HandleClaimGroup)
+
+	// Drivers
+	mux.HandleFunc("POST /api/drivers", h.HandleRegisterDriver)
+	mux.HandleFunc("GET /api/drivers", h.HandleListDrivers)
 
 	// Apply middleware stack
 	stack := api.RequestIDMiddleware(api.CORSMiddleware(mux))
@@ -99,19 +117,14 @@ func main() {
 }
 
 // grouperProcess runs the H3 bucketing engine, then wakes the assigner.
-func grouperProcess(pool *pgxpool.Pool) worker.ProcessFunc {
+func grouperProcess(pool *pgxpool.Pool, hub *ws.Hub) worker.ProcessFunc {
 	return func(ctx context.Context, p *pgxpool.Pool, payload []byte) error {
-		engine := &grouper.Engine{Pool: p}
+		engine := &grouper.Engine{Pool: p, Hub: hub}
 		engine.Run(ctx)
-		// Wake assigner via NOTIFY in case new groups were formed
+		// Enqueue an assign_group job and wake assigner via NOTIFY
+		js := &store.JobStore{DB: pool}
+		js.Enqueue(ctx, "assign_group", struct{}{}, time.Now())
 		worker.Notify(ctx, pool, "assigner_wakeup")
 		return nil
 	}
-}
-
-// assignerProcess handles "assign_group" jobs.
-// Skeleton for now — real driver assignment comes in commit 4.
-func assignerProcess(ctx context.Context, pool *pgxpool.Pool, payload []byte) error {
-	slog.Info("assigner: job received (driver assignment not yet implemented)")
-	return nil
 }

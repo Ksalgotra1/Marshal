@@ -8,6 +8,7 @@ import (
 	"github.com/Ksalgotra1/Marshal/internal/math"
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/store"
+	"github.com/Ksalgotra1/Marshal/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/uber/h3-go/v4"
 )
@@ -15,6 +16,7 @@ import (
 // Engine holds the grouper's dependencies.
 type Engine struct {
 	Pool *pgxpool.Pool
+	Hub  *ws.Hub
 }
 
 // Run processes all pending ride requests in one cycle:
@@ -119,6 +121,12 @@ func (e *Engine) matchAndCreate(ctx context.Context, gs *store.GroupStore, pool 
 			assigned[r.ID] = true
 		}
 		slog.Info("grouper: group formed", "group_id", groupID, "members", len(group), "score", score, "pass", pass)
+
+		// Broadcast to WebSocket clients
+		if e.Hub != nil {
+			event := ws.GroupFormed(groupID, len(group), score)
+			e.Hub.BroadcastMulti([]string{"global", groupID}, event)
+		}
 	}
 }
 
