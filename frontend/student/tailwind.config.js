@@ -1,0 +1,58 @@
+export default {
+  content: ['./index.html', './src/**/*.{js,jsx}'],
+  theme: {
+    extend: {
+      colors: {
+        'forest-black': '#001E2B',
+        'deep-teal': '#0F1C24',
+        'teal-gray': '#23323A',
+        'dark-slate': '#16242C',
+        'cool-gray': '#7E8E94',
+        'silver-teal': '#B8C4C2',
+        'light-input': '#E8EDEB',
+        'marshal-green': '#00ED64',
+        'deep-green': '#00684A',
+        'signal-blue': '#3D8CFF',
+        'hover-blue': '#5FA3FF',
+        'queue-teal': '#1EAEDB',
+        'driver-busy': '#D4A843',
+        status: {
+          pendingBg: '#1C2D38',
+          pendingText: '#7E8E94',
+          groupedBg: '#102A1F',
+          groupedText: '#5FB98A',
+          assignedBg: '#1C2438',
+          assignedText: '#8C93D6',
+          confirmedBg: '#0F2A1C',
+          confirmedText: '#00ED64',
+          cancelledBg: '#2E1818',
+          cancelledText: '#C97A7A',
+        },
+      },
+      fontFamily: {
+        display: ['Fraunces', 'serif'],
+        sans: ['Outfit', 'sans-serif'],
+        mono: ['Source Code Pro', 'monospace'],
+      },
+      borderRadius: {
+        minimal: '2px',
+        subtle: '6px',
+        standard: '8px',
+        card: '12px',
+        large: '24px',
+        pill: '100px',
+      },
+      boxShadow: {
+        canopy: '0px 26px 44px rgba(0,30,43,0.35), 0px 7px 13px rgba(0,0,0,0.18)',
+        standard: '0px 3px 9px rgba(0,0,0,0.15)',
+        subtle: '0px 2px 4px rgba(0,0,0,0.10)',
+        light: '0px 12px 24px rgba(0,30,43,0.12)',
+        prominent: '0px 3px 20px rgba(0,0,0,0.15)',
+      },
+      letterSpacing: {
+        code: '0.1em',
+      },
+    },
+  },
+  plugins: [],
+}

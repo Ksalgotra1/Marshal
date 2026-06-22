@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  /* Void canvas */
+  --void: #000000;
+  --near-white: #f0f0f0;
+  --silver: #a1a4a5;
+  --dark-gray: #464a4d;
+
+  /* Frost border — the signature */
+  --frost: rgba(214, 235, 253, 0.19);
+  --frost-alt: rgba(217, 237, 254, 0.145);
+  --ring: rgba(176, 199, 217, 0.145) 0px 0px 0px 1px;
+
+  /* Accents */
+  --orange: #ff801f;
+  --orange-dim: rgba(255, 89, 0, 0.22);
+  --green: #11ff99;
+  --green-dim: rgba(17, 255, 153, 0.12);
+  --green-mid: rgba(17, 255, 153, 0.18);
+  --blue: #3b9eff;
+  --blue-dim: rgba(0, 117, 255, 0.20);
+  --yellow: #ffc53d;
+  --red: #ff2047;
+  --red-dim: rgba(255, 32, 71, 0.18);
+
+  /* Surfaces — stay very close to void */
+  --surface: rgba(255,255,255,0.03);
+  --surface-hover: rgba(255,255,255,0.06);
+}
+
+html, body, #root {
+  background: var(--void);
+  color: var(--near-white);
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--frost); border-radius: 999px; }
+
+.admin-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+
+@media (max-width: 1023px) {
+  .admin-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+}
