@@ -17,6 +17,7 @@ type RideRequest struct {
 	DropoffH3     *int64    `json:"dropoff_h3,omitempty"`
 	ArriveBy      time.Time `json:"arrive_by"`
 	Status        string    `json:"status"`
+	GroupID       *string   `json:"group_id,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 }

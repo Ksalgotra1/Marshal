@@ -3,9 +3,15 @@ package store
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/Ksalgotra1/Marshal/internal/models"
 )
+
+type DriverFilter struct {
+	Limit  int
+	Offset int
+}
 
 // DriverStore handles driver CRUD operations.
 type DriverStore struct{ DB DBTX }
@@ -25,12 +31,20 @@ func (s *DriverStore) Register(ctx context.Context, name string, telegramID int6
 	return id, nil
 }
 
-// List returns all drivers.
-func (s *DriverStore) List(ctx context.Context) ([]models.Driver, error) {
-	rows, err := s.DB.Query(ctx, `
-		SELECT id, name, telegram_id, telegram_chat, status, created_at
-		FROM drivers ORDER BY created_at DESC
-	`)
+// List returns drivers ordered by newest first.
+func (s *DriverStore) List(ctx context.Context, f DriverFilter) ([]models.Driver, error) {
+	if f.Limit <= 0 || f.Limit > 100 {
+		f.Limit = 20
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+
+	query := `
+			SELECT id, name, telegram_id, telegram_chat, status, created_at
+			FROM drivers ORDER BY created_at DESC
+			LIMIT $1 OFFSET $2`
+	rows, err := s.DB.Query(ctx, query, f.Limit, f.Offset)
 	if err != nil {
 		return nil, fmt.Errorf("DriverStore.List: %w", err)
 	}
@@ -45,6 +59,14 @@ func (s *DriverStore) List(ctx context.Context) ([]models.Driver, error) {
 		drivers = append(drivers, d)
 	}
 	return drivers, nil
+}
+
+func ParseOffset(raw string) int {
+	offset, _ := strconv.Atoi(raw)
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 // GetByID fetches a single driver.

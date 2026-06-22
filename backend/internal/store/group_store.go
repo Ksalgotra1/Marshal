@@ -13,6 +13,7 @@ import (
 type GroupFilter struct {
 	Status string // filter by status (empty = all)
 	Limit  int    // max results (0 = default 20, max 100)
+	Offset int    // result offset for pagination
 }
 
 // GroupStore handles ride group CRUD operations.
@@ -78,6 +79,9 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 	if f.Limit <= 0 || f.Limit > 100 {
 		f.Limit = 20
 	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
 
 	query := `SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
 	                 dispatch_attempts, telegram_msg_id, created_at, updated_at
@@ -93,6 +97,9 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 
 	query += ` ORDER BY confidence_score DESC, created_at DESC LIMIT $` + strconv.Itoa(argIdx)
 	args = append(args, f.Limit)
+	argIdx++
+	query += ` OFFSET $` + strconv.Itoa(argIdx)
+	args = append(args, f.Offset)
 
 	rows, err := s.DB.Query(ctx, query, args...)
 	if err != nil {
@@ -121,7 +128,7 @@ func (s *GroupStore) GetByID(ctx context.Context, id string) (*models.RideGroup,
 
 // GroupDetail is the enriched response for GET /api/groups/{id}.
 type GroupDetail struct {
-	Group   models.RideGroup   `json:"group"`
+	Group   models.RideGroup     `json:"group"`
 	Members []models.RideRequest `json:"members"`
 }
 
