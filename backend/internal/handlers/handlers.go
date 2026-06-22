@@ -11,9 +11,9 @@ import (
 
 	"github.com/Ksalgotra1/Marshal/internal/api"
 	"github.com/Ksalgotra1/Marshal/internal/models"
+	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
-	"github.com/Ksalgotra1/Marshal/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,7 +21,16 @@ import (
 type Handlers struct {
 	Pool      *pgxpool.Pool
 	ServerCtx context.Context
-	Hub       *ws.Hub
+	Events    EventPublisher
+	WebSocket WebSocketUpgrader
+}
+
+type EventPublisher interface {
+	BroadcastMulti([]string, realtime.Event)
+}
+
+type WebSocketUpgrader interface {
+	HandleUpgrade(http.ResponseWriter, *http.Request)
 }
 
 // HandleCreateRequest handles POST /api/requests.
@@ -30,17 +39,17 @@ type Handlers struct {
 func (h *Handlers) HandleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	var payload models.CreateRequestPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		api.WriteError(w, http.StatusBadRequest, "invalid JSON")
+		api.WriteRequestError(w, r, http.StatusBadRequest, "invalid JSON", err)
 		return
 	}
 	if err := validatePayload(&payload); err != nil {
-		api.WriteError(w, http.StatusBadRequest, err.Error())
+		api.WriteRequestError(w, r, http.StatusBadRequest, err.Error(), nil)
 		return
 	}
 
 	tx, err := h.Pool.Begin(r.Context())
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "db error")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "database unavailable", err)
 		return
 	}
 	defer tx.Rollback(r.Context())
@@ -48,13 +57,17 @@ func (h *Handlers) HandleCreateRequest(w http.ResponseWriter, r *http.Request) {
 	reqStore := &store.RequestStore{DB: tx}
 	id, err := reqStore.Create(r.Context(), &payload)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to create request")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to create request", err)
 		return
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "commit failed")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to create request", err)
 		return
+	}
+
+	if h.Events != nil {
+		h.Events.BroadcastMulti([]string{"global"}, realtime.RequestCreated(id, payload.RequesterName))
 	}
 
 	// Enqueue a grouper job and wake the worker via Postgres NOTIFY
@@ -74,16 +87,36 @@ func (h *Handlers) HandleGetRequest(w http.ResponseWriter, r *http.Request) {
 	s := &store.RequestStore{DB: h.Pool}
 	req, err := s.GetByID(r.Context(), id)
 	if err != nil {
-		api.WriteError(w, http.StatusNotFound, "request not found")
+		api.WriteRequestError(w, r, http.StatusNotFound, "request not found", nil, "lookup_id", id)
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, req)
+}
+
+// HandleListRequests handles GET /api/requests with optional ?status= and ?limit= filters.
+func (h *Handlers) HandleListRequests(w http.ResponseWriter, r *http.Request) {
+	filter := store.RequestFilter{
+		Status: r.URL.Query().Get("status"),
+		Offset: store.ParseOffset(r.URL.Query().Get("offset")),
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		filter.Limit, _ = strconv.Atoi(l)
+	}
+
+	s := &store.RequestStore{DB: h.Pool}
+	requests, err := s.ListFiltered(r.Context(), filter)
+	if err != nil {
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to list requests", err)
+		return
+	}
+	api.WriteJSON(w, http.StatusOK, requests)
 }
 
 // HandleListGroups handles GET /api/groups with optional ?status= and ?limit= filters.
 func (h *Handlers) HandleListGroups(w http.ResponseWriter, r *http.Request) {
 	filter := store.GroupFilter{
 		Status: r.URL.Query().Get("status"),
+		Offset: store.ParseOffset(r.URL.Query().Get("offset")),
 	}
 	if l := r.URL.Query().Get("limit"); l != "" {
 		filter.Limit, _ = strconv.Atoi(l)
@@ -92,7 +125,7 @@ func (h *Handlers) HandleListGroups(w http.ResponseWriter, r *http.Request) {
 	s := &store.GroupStore{DB: h.Pool}
 	groups, err := s.ListFiltered(r.Context(), filter)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to list groups")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to list groups", err)
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, groups)
@@ -104,7 +137,7 @@ func (h *Handlers) HandleGetGroup(w http.ResponseWriter, r *http.Request) {
 	s := &store.GroupStore{DB: h.Pool}
 	detail, err := s.GetByIDWithMembers(r.Context(), id)
 	if err != nil {
-		api.WriteError(w, http.StatusNotFound, "group not found")
+		api.WriteRequestError(w, r, http.StatusNotFound, "group not found", nil, "lookup_id", id)
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, detail)
@@ -115,7 +148,7 @@ func (h *Handlers) HandleListOpenGroups(w http.ResponseWriter, r *http.Request) 
 	s := &store.GroupStore{DB: h.Pool}
 	groups, err := s.ListOpen(r.Context())
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to list open groups")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to list open groups", err)
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, groups)
@@ -130,26 +163,44 @@ func (h *Handlers) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 		RequestID string `json:"request_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RequestID == "" {
-		api.WriteError(w, http.StatusBadRequest, "request_id is required")
+		api.WriteRequestError(w, r, http.StatusBadRequest, "request_id is required", err)
 		return
 	}
 
 	tx, err := h.Pool.Begin(r.Context())
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "db error")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "database unavailable", err)
 		return
 	}
 	defer tx.Rollback(r.Context())
 
 	gs := &store.GroupStore{DB: tx}
+	
+	// Enforce capacity limit of 4
+	ids, err := gs.GetMemberRequestIDs(r.Context(), groupID)
+	if err != nil {
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to check group capacity", err)
+		return
+	}
+	if len(ids) >= 4 {
+		api.WriteRequestError(w, r, http.StatusBadRequest, "group is full", nil)
+		return
+	}
+
 	if err := gs.AddMember(r.Context(), groupID, body.RequestID); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to join group")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to join group", err, "group_id", groupID)
 		return
 	}
 
 	if err := tx.Commit(r.Context()); err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "commit failed")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to join group", err, "group_id", groupID)
 		return
+	}
+
+	// Broadcast member:joined event
+	if h.Events != nil {
+		event := realtime.MemberJoined(groupID, body.RequestID)
+		h.Events.BroadcastMulti([]string{"global", groupID}, event)
 	}
 
 	api.WriteJSON(w, http.StatusOK, api.JSON{"joined": true, "group_id": groupID})
@@ -190,15 +241,19 @@ func (h *Handlers) HandleRegisterDriver(w http.ResponseWriter, r *http.Request) 
 		TelegramID int64  `json:"telegram_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" || body.TelegramID == 0 {
-		api.WriteError(w, http.StatusBadRequest, "name and telegram_id are required")
+		api.WriteRequestError(w, r, http.StatusBadRequest, "name and telegram_id are required", err)
 		return
 	}
 
 	ds := &store.DriverStore{DB: h.Pool}
 	id, err := ds.Register(r.Context(), body.Name, body.TelegramID)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to register driver")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to register driver", err)
 		return
+	}
+
+	if h.Events != nil {
+		h.Events.BroadcastMulti([]string{"global"}, realtime.DriverRegistered(id, body.Name))
 	}
 
 	api.WriteJSON(w, http.StatusCreated, api.JSON{"id": id, "name": body.Name})
@@ -207,9 +262,15 @@ func (h *Handlers) HandleRegisterDriver(w http.ResponseWriter, r *http.Request) 
 // HandleListDrivers handles GET /api/drivers (admin view).
 func (h *Handlers) HandleListDrivers(w http.ResponseWriter, r *http.Request) {
 	ds := &store.DriverStore{DB: h.Pool}
-	drivers, err := ds.List(r.Context())
+	filter := store.DriverFilter{
+		Offset: store.ParseOffset(r.URL.Query().Get("offset")),
+	}
+	if l := r.URL.Query().Get("limit"); l != "" {
+		filter.Limit, _ = strconv.Atoi(l)
+	}
+	drivers, err := ds.List(r.Context(), filter)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "failed to list drivers")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to list drivers", err)
 		return
 	}
 	api.WriteJSON(w, http.StatusOK, drivers)
@@ -227,19 +288,19 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 		DriverID string `json:"driver_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.DriverID == "" {
-		api.WriteError(w, http.StatusBadRequest, "driver_id is required")
+		api.WriteRequestError(w, r, http.StatusBadRequest, "driver_id is required", err)
 		return
 	}
 
 	gs := &store.GroupStore{DB: h.Pool}
 	rowsAffected, err := gs.ClaimGroup(r.Context(), groupID, body.DriverID)
 	if err != nil {
-		api.WriteError(w, http.StatusInternalServerError, "claim failed")
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "claim failed", err, "group_id", groupID)
 		return
 	}
 
 	if rowsAffected == 0 {
-		api.WriteError(w, http.StatusConflict, "group already claimed or not available")
+		api.WriteRequestError(w, r, http.StatusConflict, "group already claimed or not available", nil, "group_id", groupID)
 		return
 	}
 
@@ -256,9 +317,9 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 	slog.Info("driver claimed group", "group_id", groupID, "driver_id", body.DriverID)
 
 	// Broadcast assignment event
-	if h.Hub != nil {
-		event := ws.GroupAssigned(groupID, body.DriverID, driverName)
-		h.Hub.BroadcastMulti([]string{"global", groupID}, event)
+	if h.Events != nil {
+		event := realtime.GroupAssigned(groupID, body.DriverID, driverName)
+		h.Events.BroadcastMulti([]string{"global", groupID}, event)
 	}
 
 	api.WriteJSON(w, http.StatusOK, api.JSON{
@@ -270,6 +331,9 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 
 // HandleWebSocket upgrades HTTP to WebSocket. Query: ?room=global or ?room={group_id}
 func (h *Handlers) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
-	h.Hub.HandleUpgrade(w, r)
+	if h.WebSocket == nil {
+		http.Error(w, "websocket unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	h.WebSocket.HandleUpgrade(w, r)
 }
-

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -16,12 +17,47 @@ type JSON map[string]any
 func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		slog.Error("api: failed to encode JSON response", "error", err, "status", status)
+	}
 }
 
 // WriteError writes a standard error response.
 func WriteError(w http.ResponseWriter, status int, msg string) {
 	WriteJSON(w, status, JSON{"error": msg})
+}
+
+// RequestID returns the request correlation id attached by RequestIDMiddleware.
+func RequestID(r *http.Request) string {
+	id, _ := r.Context().Value(RequestIDKey).(string)
+	return id
+}
+
+// WriteRequestError sends a safe client error and logs internal details with a request id.
+func WriteRequestError(w http.ResponseWriter, r *http.Request, status int, publicMsg string, internalErr error, attrs ...any) {
+	requestID := RequestID(r)
+	logAttrs := []any{
+		"request_id", requestID,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"status", status,
+		"public_error", publicMsg,
+	}
+	if internalErr != nil {
+		logAttrs = append(logAttrs, "error", internalErr)
+	}
+	logAttrs = append(logAttrs, attrs...)
+
+	if status >= http.StatusInternalServerError {
+		slog.Error("api request failed", logAttrs...)
+	} else {
+		slog.Warn("api request rejected", logAttrs...)
+	}
+
+	WriteJSON(w, status, JSON{
+		"error":      publicMsg,
+		"request_id": requestID,
+	})
 }
 
 // CORSMiddleware sets permissive CORS headers for the configured origin.

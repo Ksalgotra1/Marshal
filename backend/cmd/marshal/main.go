@@ -14,9 +14,10 @@ import (
 	"github.com/Ksalgotra1/Marshal/internal/config"
 	"github.com/Ksalgotra1/Marshal/internal/grouper"
 	"github.com/Ksalgotra1/Marshal/internal/handlers"
+	"github.com/Ksalgotra1/Marshal/internal/realtime"
+	"github.com/Ksalgotra1/Marshal/internal/sse"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
-	"github.com/Ksalgotra1/Marshal/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -34,9 +35,9 @@ func main() {
 	}
 	defer pool.Close()
 
-	// WebSocket hub — manages rooms + broadcasts events
-	hub := ws.NewHub()
-	go hub.Run()
+	// Realtime hub manages rooms and fans events out to transport adapters.
+	realtimeHub := realtime.NewHub()
+	go realtimeHub.Run()
 
 	// Start background workers
 	go worker.Run(ctx, worker.Config{
@@ -45,7 +46,7 @@ func main() {
 		Channel:  "grouper_wakeup",
 		Interval: 30 * time.Second,
 		Pool:     pool,
-		Process:  grouperProcess(pool, hub),
+		Process:  grouperProcess(pool, realtimeHub),
 	})
 
 	go worker.Run(ctx, worker.Config{
@@ -54,10 +55,10 @@ func main() {
 		Channel:  "assigner_wakeup",
 		Interval: 30 * time.Second,
 		Pool:     pool,
-		Process:  assigner.NewProcess(hub),
+		Process:  assigner.NewProcess(realtimeHub),
 	})
 
-	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx, Hub: hub}
+	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx, Events: realtimeHub, WebSocket: realtimeHub}
 
 	mux := http.NewServeMux()
 
@@ -65,14 +66,16 @@ func main() {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, api.JSON{
 			"status":      "ok",
-			"connections": hub.ConnectionCount(),
+			"connections": realtimeHub.ConnectionCount(),
 		})
 	})
 
 	// WebSocket
 	mux.HandleFunc("GET /ws", h.HandleWebSocket)
+	mux.Handle("GET /events", &sse.Handler{Streams: realtimeHub})
 
 	// Ride requests
+	mux.HandleFunc("GET /api/requests", h.HandleListRequests)
 	mux.HandleFunc("POST /api/requests", h.HandleCreateRequest)
 	mux.HandleFunc("GET /api/requests/{id}", h.HandleGetRequest)
 
@@ -117,9 +120,9 @@ func main() {
 }
 
 // grouperProcess runs the H3 bucketing engine, then wakes the assigner.
-func grouperProcess(pool *pgxpool.Pool, hub *ws.Hub) worker.ProcessFunc {
+func grouperProcess(pool *pgxpool.Pool, events grouper.EventPublisher) worker.ProcessFunc {
 	return func(ctx context.Context, p *pgxpool.Pool, payload []byte) error {
-		engine := &grouper.Engine{Pool: p, Hub: hub}
+		engine := &grouper.Engine{Pool: p, Events: events}
 		engine.Run(ctx)
 		// Enqueue an assign_group job and wake assigner via NOTIFY
 		js := &store.JobStore{DB: pool}
