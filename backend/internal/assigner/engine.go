@@ -6,18 +6,22 @@ import (
 	"math"
 	"time"
 
+	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
-	"github.com/Ksalgotra1/Marshal/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type EventPublisher interface {
+	BroadcastMulti([]string, realtime.Event)
+}
 
 // Run processes all assignable groups in one cycle:
 // 1. Cancel groups that exceeded max retries (3 attempts)
 // 2. Revert timed-out dispatching groups back to 'grouped'
 // 3. Pop highest-score group from priority queue
 // 4. Mark it as 'dispatching' — drivers can now claim it
-func Run(ctx context.Context, pool *pgxpool.Pool, hub *ws.Hub) {
+func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher) {
 	gs := &store.GroupStore{DB: pool}
 
 	// Step 1: Cancel groups with 3+ failed attempts
@@ -81,10 +85,9 @@ func Run(ctx context.Context, pool *pgxpool.Pool, hub *ws.Hub) {
 			"timeout", timeout,
 		)
 
-		// Broadcast dispatching event
-		if hub != nil {
-			event := ws.GroupDispatching(group.ID, group.DispatchAttempts+1, group.ConfidenceScore)
-			hub.BroadcastMulti([]string{"global", group.ID}, event)
+		if events != nil {
+			event := realtime.GroupDispatching(group.ID, group.DispatchAttempts+1, group.ConfidenceScore)
+			events.BroadcastMulti([]string{"global", group.ID}, event)
 		}
 	}
 }
@@ -104,13 +107,13 @@ func DynamicTimeout(arriveBy time.Time) time.Duration {
 	remaining := time.Until(arriveBy).Minutes()
 	timeoutMin := remaining * 0.1
 	timeoutMin = math.Max(2.0, math.Min(10.0, timeoutMin))
-	return time.Duration(timeoutMin) * time.Minute
+	return time.Duration(math.Ceil(timeoutMin)) * time.Minute
 }
 
-// NewProcess creates a worker.ProcessFunc with the hub injected.
-func NewProcess(hub *ws.Hub) worker.ProcessFunc {
+// NewProcess creates a worker.ProcessFunc with event publishing injected.
+func NewProcess(events EventPublisher) worker.ProcessFunc {
 	return func(ctx context.Context, pool *pgxpool.Pool, payload []byte) error {
-		Run(ctx, pool, hub)
+		Run(ctx, pool, events)
 		worker.Notify(ctx, pool, "assigner_wakeup")
 		return nil
 	}

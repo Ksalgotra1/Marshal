@@ -7,16 +7,22 @@ import (
 
 	"github.com/Ksalgotra1/Marshal/internal/math"
 	"github.com/Ksalgotra1/Marshal/internal/models"
+	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
-	"github.com/Ksalgotra1/Marshal/internal/ws"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/uber/h3-go/v4"
 )
 
+type EventPublisher interface {
+	BroadcastMulti([]string, realtime.Event)
+}
+
+const targetGroupSize = 3
+
 // Engine holds the grouper's dependencies.
 type Engine struct {
-	Pool *pgxpool.Pool
-	Hub  *ws.Hub
+	Pool   *pgxpool.Pool
+	Events EventPublisher
 }
 
 // Run processes all pending ride requests in one cycle:
@@ -41,23 +47,29 @@ func (e *Engine) Run(ctx context.Context) {
 		slog.Error("grouper: failed to fetch pending", "error", err)
 		return
 	}
-	if len(pending) < 2 {
+	if len(pending) < targetGroupSize {
 		return
 	}
 
 	// Bucket requests by H3 pickup cell
 	buckets := make(map[int64][]models.RideRequest)
+	now := time.Now()
 	for _, r := range pending {
+		// Ignore stale requests that are already past their arrive_by time
+		if now.After(r.ArriveBy) {
+			continue
+		}
 		if r.PickupH3 != nil {
 			buckets[*r.PickupH3] = append(buckets[*r.PickupH3], r)
 		}
 	}
 
 	assigned := make(map[string]bool)
+	var formedEvents []realtime.Event
 
 	// PASS 1 — Exact H3 cell match
 	for _, bucket := range buckets {
-		e.matchAndCreate(ctx, grpStore, bucket, assigned, "exact")
+		formedEvents = append(formedEvents, e.matchAndCreate(ctx, grpStore, bucket, assigned, "exact")...)
 	}
 
 	// PASS 2 — k-ring=1 expansion (~870m)
@@ -75,7 +87,7 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 		}
 		_ = bucket
-		e.matchAndCreate(ctx, grpStore, pool, assigned, "k1")
+		formedEvents = append(formedEvents, e.matchAndCreate(ctx, grpStore, pool, assigned, "k1")...)
 	}
 
 	// PASS 3 — k-ring=2 expansion (~1.7km)
@@ -93,7 +105,7 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 		}
 		_ = bucket
-		e.matchAndCreate(ctx, grpStore, pool, assigned, "k2")
+		formedEvents = append(formedEvents, e.matchAndCreate(ctx, grpStore, pool, assigned, "k2")...)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -101,14 +113,21 @@ func (e *Engine) Run(ctx context.Context) {
 		return
 	}
 
-	slog.Info("grouper: cycle complete", "total_pending", len(pending), "groups_formed", len(assigned))
+	if e.Events != nil {
+		for _, event := range formedEvents {
+			e.Events.BroadcastMulti([]string{"global", event.GroupID}, event)
+		}
+	}
+
+	slog.Info("grouper: cycle complete", "total_pending", len(pending), "members_grouped", len(assigned))
 }
 
 // matchAndCreate finds the best compatible group from the pool and persists it.
-func (e *Engine) matchAndCreate(ctx context.Context, gs *store.GroupStore, pool []models.RideRequest, assigned map[string]bool, pass string) {
+func (e *Engine) matchAndCreate(ctx context.Context, gs *store.GroupStore, pool []models.RideRequest, assigned map[string]bool, pass string) []realtime.Event {
+	var events []realtime.Event
 	for {
 		group := bestGroup(pool, assigned)
-		if len(group) < 2 {
+		if len(group) < targetGroupSize {
 			break
 		}
 		score := scoreGroup(group)
@@ -122,15 +141,12 @@ func (e *Engine) matchAndCreate(ctx context.Context, gs *store.GroupStore, pool 
 		}
 		slog.Info("grouper: group formed", "group_id", groupID, "members", len(group), "score", score, "pass", pass)
 
-		// Broadcast to WebSocket clients
-		if e.Hub != nil {
-			event := ws.GroupFormed(groupID, len(group), score)
-			e.Hub.BroadcastMulti([]string{"global", groupID}, event)
-		}
+		events = append(events, realtime.GroupFormed(groupID, len(group), score))
 	}
+	return events
 }
 
-// bestGroup picks the highest-scoring compatible pair from pool, then packs up to 4.
+// bestGroup picks the best compatible 3-request group from the current pool.
 func bestGroup(pool []models.RideRequest, assigned map[string]bool) []models.RideRequest {
 	var best []models.RideRequest
 	var bestScore float64 = -9999
@@ -139,42 +155,24 @@ func bestGroup(pool []models.RideRequest, assigned map[string]bool) []models.Rid
 		if assigned[r1.ID] {
 			continue
 		}
-		for j, r2 := range pool {
-			if i == j || assigned[r2.ID] {
+		for j := i + 1; j < len(pool); j++ {
+			r2 := pool[j]
+			if assigned[r2.ID] {
 				continue
 			}
-			if !dropoffCompatible(r1, r2) {
-				continue
-			}
-			if !timeCompatible(r1, r2) {
-				continue
-			}
-			s := scoreGroup([]models.RideRequest{r1, r2})
-			if s > bestScore {
-				bestScore = s
-				best = []models.RideRequest{r1, r2}
-			}
-		}
-	}
-
-	// Pack up to 4 — add anyone compatible with all current members
-	if len(best) == 2 {
-		for _, r := range pool {
-			if len(best) >= 4 {
-				break
-			}
-			if assigned[r.ID] || r.ID == best[0].ID || r.ID == best[1].ID {
-				continue
-			}
-			compatible := true
-			for _, m := range best {
-				if !dropoffCompatible(m, r) || !timeCompatible(m, r) {
-					compatible = false
-					break
+			for k := j + 1; k < len(pool); k++ {
+				r3 := pool[k]
+				if assigned[r3.ID] {
+					continue
 				}
-			}
-			if compatible {
-				best = append(best, r)
+				candidate := []models.RideRequest{r1, r2, r3}
+				if !groupCompatible(candidate) {
+					continue
+				}
+				if s := scoreGroup(candidate); s > bestScore {
+					bestScore = s
+					best = candidate
+				}
 			}
 		}
 	}
@@ -184,17 +182,55 @@ func bestGroup(pool []models.RideRequest, assigned map[string]bool) []models.Rid
 
 // scoreGroup computes the composite confidence score.
 // Higher = better group. Used as the priority queue key.
-// Formula: base points per member - dropoff separation penalty - time mismatch penalty
 func scoreGroup(group []models.RideRequest) float64 {
-	score := float64(len(group)) * 10.0 // base: 2→20, 3→30, 4→40
-	if len(group) >= 2 {
-		r1, r2 := group[0], group[1]
-		distKm := math.Distance(r1.DropoffLat, r1.DropoffLng, r2.DropoffLat, r2.DropoffLng)
-		score -= distKm * 2.0 // penalise spread-out dropoffs
-		timeDiff := r1.ArriveBy.Sub(r2.ArriveBy).Abs().Minutes()
-		score -= timeDiff * 0.1 // penalise mismatched deadlines
+	score := float64(len(group)) * 10.0
+	earliestArriveBy := group[0].ArriveBy
+	oldestCreatedAt := group[0].CreatedAt
+
+	for i := 0; i < len(group); i++ {
+		if group[i].ArriveBy.Before(earliestArriveBy) {
+			earliestArriveBy = group[i].ArriveBy
+		}
+		if group[i].CreatedAt.Before(oldestCreatedAt) {
+			oldestCreatedAt = group[i].CreatedAt
+		}
+		for j := i + 1; j < len(group); j++ {
+			dropoffKm := math.Distance(group[i].DropoffLat, group[i].DropoffLng, group[j].DropoffLat, group[j].DropoffLng)
+			pickupKm := math.Distance(group[i].PickupLat, group[i].PickupLng, group[j].PickupLat, group[j].PickupLng)
+			timeDiff := group[i].ArriveBy.Sub(group[j].ArriveBy).Abs().Minutes()
+			score -= dropoffKm * 2.0
+			score -= pickupKm * 1.5
+			score -= timeDiff * 0.1
+		}
+	}
+
+	minutesToDeadline := time.Until(earliestArriveBy).Minutes()
+	if minutesToDeadline < 120 {
+		if minutesToDeadline < 0 {
+			minutesToDeadline = 0
+		}
+		score += (120 - minutesToDeadline) / 12
+	}
+
+	waitMinutes := time.Since(oldestCreatedAt).Minutes()
+	if waitMinutes > 25 {
+		waitMinutes = 25
+	}
+	if waitMinutes > 0 {
+		score += waitMinutes * 0.2
 	}
 	return score
+}
+
+func groupCompatible(group []models.RideRequest) bool {
+	for i := 0; i < len(group); i++ {
+		for j := i + 1; j < len(group); j++ {
+			if !dropoffCompatible(group[i], group[j]) || !timeCompatible(group[i], group[j]) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // dropoffCompatible returns true if two requests share a roughly similar dropoff.
