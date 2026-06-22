@@ -1,3 +1,0 @@
-./handlers.go
-./http_integration_test.go
-./validation_unit_test.go

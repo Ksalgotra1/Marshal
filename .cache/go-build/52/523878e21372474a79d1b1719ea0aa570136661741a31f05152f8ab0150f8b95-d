@@ -1,4 +1,0 @@
-./client.go
-./event.go
-./hub.go
-./hub_unit_test.go

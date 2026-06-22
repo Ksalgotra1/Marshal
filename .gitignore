@@ -23,6 +23,7 @@ documents/
 
 # Temp
 tmp/
+.cache/
 
 # Project Management
 PLAN.md
