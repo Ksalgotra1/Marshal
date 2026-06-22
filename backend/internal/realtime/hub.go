@@ -1,4 +1,4 @@
-package ws
+package realtime
 
 import (
 	"log/slog"
@@ -8,31 +8,39 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+type StreamClient interface {
+	Rooms() []string
+	Send() chan []byte
+	Close()
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true }, // CORS handled by middleware
+	CheckOrigin:     func(r *http.Request) bool { return true },
 }
 
-// Hub maintains the set of active clients and broadcasts events to rooms.
-// Room "global" receives ALL events. Room "{group_id}" receives events for that group only.
 type Hub struct {
-	mu         sync.RWMutex
-	rooms      map[string]map[*Client]bool
-	register   chan *Client
-	unregister chan *Client
+	mu            sync.RWMutex
+	rooms         map[string]map[*Client]bool
+	streams       map[string]map[StreamClient]bool
+	register      chan *Client
+	unregister    chan *Client
+	sseRegister   chan StreamClient
+	sseUnregister chan StreamClient
 }
 
-// NewHub creates a new Hub.
 func NewHub() *Hub {
 	return &Hub{
-		rooms:      make(map[string]map[*Client]bool),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
+		rooms:         make(map[string]map[*Client]bool),
+		streams:       make(map[string]map[StreamClient]bool),
+		register:      make(chan *Client),
+		unregister:    make(chan *Client),
+		sseRegister:   make(chan StreamClient),
+		sseUnregister: make(chan StreamClient),
 	}
 }
 
-// Run starts the hub's event loop. Must be called as a goroutine.
 func (h *Hub) Run() {
 	for {
 		select {
@@ -46,6 +54,19 @@ func (h *Hub) Run() {
 			}
 			h.mu.Unlock()
 			slog.Info("ws: client connected", "rooms", client.rooms)
+			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
+
+		case client := <-h.sseRegister:
+			h.mu.Lock()
+			for _, room := range client.Rooms() {
+				if h.streams[room] == nil {
+					h.streams[room] = make(map[StreamClient]bool)
+				}
+				h.streams[room][client] = true
+			}
+			h.mu.Unlock()
+			slog.Info("sse: client connected", "rooms", client.Rooms())
+			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -62,40 +83,62 @@ func (h *Hub) Run() {
 			close(client.send)
 			h.mu.Unlock()
 			slog.Info("ws: client disconnected", "rooms", client.rooms)
+			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
+
+		case client := <-h.sseUnregister:
+			h.mu.Lock()
+			for _, room := range client.Rooms() {
+				if clients, ok := h.streams[room]; ok {
+					if _, exists := clients[client]; exists {
+						delete(clients, client)
+						if len(clients) == 0 {
+							delete(h.streams, room)
+						}
+					}
+				}
+			}
+			client.Close()
+			h.mu.Unlock()
+			slog.Info("sse: client disconnected", "rooms", client.Rooms())
+			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
 		}
 	}
 }
 
-// Broadcast sends an event to all clients in the specified room.
-// Uses RLock — multiple broadcasts can run concurrently without blocking each other.
-// Slow clients that can't keep up get their channel closed (evicted).
 func (h *Hub) Broadcast(room string, event Event) {
 	msg := event.Marshal()
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 
 	clients := h.rooms[room]
 	for client := range clients {
 		select {
 		case client.send <- msg:
 		default:
-			// Slow client — evict
 			close(client.send)
 			delete(clients, client)
 			slog.Warn("ws: evicted slow client", "room", room)
 		}
 	}
+
+	streams := h.streams[room]
+	for client := range streams {
+		select {
+		case client.Send() <- msg:
+		default:
+			client.Close()
+			delete(streams, client)
+			slog.Warn("sse: evicted slow client", "room", room)
+		}
+	}
 }
 
-// BroadcastMulti sends an event to multiple rooms (typically "global" + group_id).
 func (h *Hub) BroadcastMulti(rooms []string, event Event) {
 	for _, room := range rooms {
 		h.Broadcast(room, event)
 	}
 }
 
-// HandleUpgrade upgrades an HTTP request to a WebSocket connection and registers the client.
-// Query parameter ?room= specifies which room(s) to join (comma-separated or default "global").
 func (h *Hub) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -108,24 +151,26 @@ func (h *Hub) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
 		roomParam = "global"
 	}
 
-	// Support joining multiple rooms: ?room=global,{group_id}
-	rooms := splitRooms(roomParam)
-
 	client := &Client{
 		hub:   h,
 		conn:  conn,
 		send:  make(chan []byte, sendBufferSize),
-		rooms: rooms,
+		rooms: splitRooms(roomParam),
 	}
 
 	h.register <- client
-
-	// Start pumps in goroutines — they own the connection lifecycle
 	go client.writePump()
 	go client.readPump()
 }
 
-// ConnectionCount returns the total number of active connections (for /healthz).
+func (h *Hub) RegisterStreamClient(client StreamClient) {
+	h.sseRegister <- client
+}
+
+func (h *Hub) UnregisterStreamClient(client StreamClient) {
+	h.sseUnregister <- client
+}
+
 func (h *Hub) ConnectionCount() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -135,6 +180,15 @@ func (h *Hub) ConnectionCount() int {
 		for c := range clients {
 			if !seen[c] {
 				seen[c] = true
+				count++
+			}
+		}
+	}
+	seenStreams := make(map[StreamClient]bool)
+	for _, clients := range h.streams {
+		for c := range clients {
+			if !seenStreams[c] {
+				seenStreams[c] = true
 				count++
 			}
 		}

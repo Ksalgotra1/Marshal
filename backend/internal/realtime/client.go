@@ -1,4 +1,4 @@
-package ws
+package realtime
 
 import (
 	"log/slog"
@@ -8,19 +8,10 @@ import (
 )
 
 const (
-	// Time allowed to write a message to the client.
-	writeWait = 10 * time.Second
-
-	// Time allowed to read the next pong message from the client.
-	pongWait = 40 * time.Second
-
-	// Send pings to client with this period. Must be less than pongWait.
-	pingPeriod = 30 * time.Second
-
-	// Maximum message size allowed from client.
+	writeWait      = 10 * time.Second
+	pongWait       = 40 * time.Second
+	pingPeriod     = 30 * time.Second
 	maxMessageSize = 512
-
-	// Send buffer size per client.
 	sendBufferSize = 256
 )
 
@@ -32,9 +23,6 @@ type Client struct {
 	rooms []string
 }
 
-// readPump pumps messages from the WebSocket connection to the hub.
-// It blocks on ReadMessage to keep the TCP socket alive and detect disconnects.
-// The application only reads pong/close frames — clients don't send data messages.
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
@@ -59,8 +47,6 @@ func (c *Client) readPump() {
 	}
 }
 
-// writePump pumps messages from the send channel to the WebSocket connection.
-// A ticker sends periodic pings to detect dead connections.
 func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
@@ -73,7 +59,6 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// Hub closed the channel — send close frame.
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -84,7 +69,6 @@ func (c *Client) writePump() {
 			}
 			w.Write(message)
 
-			// Coalesce queued messages into the same write for efficiency.
 			n := len(c.send)
 			for i := 0; i < n; i++ {
 				w.Write([]byte("\n"))

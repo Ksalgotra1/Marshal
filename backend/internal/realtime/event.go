@@ -1,11 +1,11 @@
-package ws
+package realtime
 
 import (
 	"encoding/json"
 	"time"
 )
 
-// Event is a real-time message pushed to WebSocket clients.
+// Event is a real-time message pushed to live clients.
 type Event struct {
 	Type      string    `json:"type"`
 	GroupID   string    `json:"group_id,omitempty"`
@@ -19,8 +19,6 @@ func (e Event) Marshal() []byte {
 	return b
 }
 
-// ─── Event Constructors ─────────────────────────────────────────────────────
-
 func GroupFormed(groupID string, memberCount int, score float64) Event {
 	return Event{
 		Type:    "group:formed",
@@ -28,6 +26,28 @@ func GroupFormed(groupID string, memberCount int, score float64) Event {
 		Data: map[string]any{
 			"member_count": memberCount,
 			"score":        score,
+		},
+		Timestamp: time.Now(),
+	}
+}
+
+func RequestCreated(requestID, requesterName string) Event {
+	return Event{
+		Type: "request:created",
+		Data: map[string]any{
+			"request_id":     requestID,
+			"requester_name": requesterName,
+		},
+		Timestamp: time.Now(),
+	}
+}
+
+func DriverRegistered(driverID, driverName string) Event {
+	return Event{
+		Type: "driver:registered",
+		Data: map[string]any{
+			"driver_id":   driverID,
+			"driver_name": driverName,
 		},
 		Timestamp: time.Now(),
 	}
@@ -74,6 +94,16 @@ func MemberJoined(groupID, requesterName string) Event {
 		GroupID: groupID,
 		Data: map[string]any{
 			"requester_name": requesterName,
+		},
+		Timestamp: time.Now(),
+	}
+}
+
+func SystemConnections(count int) Event {
+	return Event{
+		Type: "system:connections",
+		Data: map[string]any{
+			"connections": count,
 		},
 		Timestamp: time.Now(),
 	}
