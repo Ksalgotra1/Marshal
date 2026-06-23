@@ -130,7 +130,7 @@ func (e *Engine) matchAndCreate(ctx context.Context, gs *store.GroupStore, pool 
 		if len(group) < targetGroupSize {
 			break
 		}
-		score := scoreGroup(group)
+		score := computeRouteScoreForGroup(group)
 		groupID, err := gs.Create(ctx, group, score)
 		if err != nil {
 			slog.Error("grouper: failed to create group", "pass", pass, "error", err)
@@ -169,7 +169,7 @@ func bestGroup(pool []models.RideRequest, assigned map[string]bool) []models.Rid
 				if !groupCompatible(candidate) {
 					continue
 				}
-				if s := scoreGroup(candidate); s > bestScore {
+				if s := computeRouteScoreForGroup(candidate); s > bestScore {
 					bestScore = s
 					best = candidate
 				}
@@ -180,46 +180,27 @@ func bestGroup(pool []models.RideRequest, assigned map[string]bool) []models.Rid
 	return best
 }
 
-// scoreGroup computes the composite confidence score.
-// Higher = better group. Used as the priority queue key.
-func scoreGroup(group []models.RideRequest) float64 {
-	score := float64(len(group)) * 10.0
-	earliestArriveBy := group[0].ArriveBy
-	oldestCreatedAt := group[0].CreatedAt
-
-	for i := 0; i < len(group); i++ {
-		if group[i].ArriveBy.Before(earliestArriveBy) {
-			earliestArriveBy = group[i].ArriveBy
-		}
-		if group[i].CreatedAt.Before(oldestCreatedAt) {
-			oldestCreatedAt = group[i].CreatedAt
-		}
-		for j := i + 1; j < len(group); j++ {
-			dropoffKm := math.Distance(group[i].DropoffLat, group[i].DropoffLng, group[j].DropoffLat, group[j].DropoffLng)
-			pickupKm := math.Distance(group[i].PickupLat, group[i].PickupLng, group[j].PickupLat, group[j].PickupLng)
-			timeDiff := group[i].ArriveBy.Sub(group[j].ArriveBy).Abs().Minutes()
-			score -= dropoffKm * 2.0
-			score -= pickupKm * 1.5
-			score -= timeDiff * 0.1
-		}
+func computeRouteScoreForGroup(group []models.RideRequest) float64 {
+	if len(group) < 2 {
+		return 0
 	}
-
-	minutesToDeadline := time.Until(earliestArriveBy).Minutes()
-	if minutesToDeadline < 120 {
-		if minutesToDeadline < 0 {
-			minutesToDeadline = 0
-		}
-		score += (120 - minutesToDeadline) / 12
+	res := CheckCorridor(group[0], group[len(group)-1])
+	var members []RequestMember
+	for _, r := range group {
+		members = append(members, RequestMember{
+			StudentID:  r.ID,
+			PickupLat:  r.PickupLat,
+			PickupLng:  r.PickupLng,
+			DropoffLat: r.DropoffLat,
+			DropoffLng: r.DropoffLng,
+			ArriveBy:   r.ArriveBy,
+		})
 	}
-
-	waitMinutes := time.Since(oldestCreatedAt).Minutes()
-	if waitMinutes > 25 {
-		waitMinutes = 25
+	in := RouteScoreInput{
+		Members:   members,
+		GroupType: res.Type,
 	}
-	if waitMinutes > 0 {
-		score += waitMinutes * 0.2
-	}
-	return score
+	return ComputeRouteScore(in)
 }
 
 func groupCompatible(group []models.RideRequest) bool {

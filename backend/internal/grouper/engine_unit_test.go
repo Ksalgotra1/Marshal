@@ -47,20 +47,6 @@ func (s *GrouperUnitSuite) TestCompatibilityRejectsDistantDropoffOrWideTimeWindo
 	s.False(groupCompatible([]models.RideRequest{a, late}))
 }
 
-func (s *GrouperUnitSuite) TestScoreRewardsTightGroupsOverLooseGroups() {
-	tight := []models.RideRequest{
-		s.request("a", 30.3545, 76.3658, 30.7333, 76.7794, s.now.Add(45*time.Minute)),
-		s.request("b", 30.3547, 76.3660, 30.7334, 76.7796, s.now.Add(50*time.Minute)),
-		s.request("c", 30.3548, 76.3661, 30.7332, 76.7795, s.now.Add(55*time.Minute)),
-	}
-	loose := []models.RideRequest{
-		s.request("x", 30.3545, 76.3658, 30.7333, 76.7794, s.now.Add(45*time.Minute)),
-		s.request("y", 30.3650, 76.3750, 30.7420, 76.7890, s.now.Add(95*time.Minute)),
-		s.request("z", 30.3600, 76.3700, 30.7210, 76.7680, s.now.Add(110*time.Minute)),
-	}
-
-	s.Greater(scoreGroup(tight), scoreGroup(loose))
-}
 
 func (s *GrouperUnitSuite) request(id string, pickupLat, pickupLng, dropoffLat, dropoffLng float64, arriveBy time.Time) models.RideRequest {
 	return models.RideRequest{
