@@ -17,6 +17,7 @@ vendor/
 *.test
 coverage.out
 coverage.html
+coverage_filtered.out
 
 # Documents (reference material, not source code)
 documents/
