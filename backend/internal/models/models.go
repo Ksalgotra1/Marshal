@@ -36,7 +36,7 @@ type CreateRequestPayload struct {
 type RideGroup struct {
 	ID                string     `json:"id"`
 	Status            string     `json:"status"`
-	ConfidenceScore   float64    `json:"confidence_score"`
+	RouteScore        float64    `json:"route_score"`
 	ArriveBy          time.Time  `json:"arrive_by"`
 	ExpectedDeparture *time.Time `json:"expected_departure,omitempty"`
 	DriverID          *string    `json:"driver_id,omitempty"`

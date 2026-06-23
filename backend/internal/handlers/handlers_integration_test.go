@@ -86,7 +86,7 @@ func (s *HandlersIntegrationSuite) TestClaimGroup_ConcurrentConflict() {
 	// Create a dispatching group
 	var groupID string
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
-		INSERT INTO ride_groups (status, confidence_score, arrive_by) VALUES ('dispatching', 50, NOW() + INTERVAL '1 hour') RETURNING id
+		INSERT INTO ride_groups (status, route_score, arrive_by) VALUES ('dispatching', 50, NOW() + INTERVAL '1 hour') RETURNING id
 	`).Scan(&groupID))
 
 	done := make(chan int)
@@ -123,7 +123,7 @@ func (s *HandlersIntegrationSuite) TestJoinGroup_CapacityLimit() {
 	// Create a group
 	var groupID string
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
-		INSERT INTO ride_groups (status, confidence_score, arrive_by) VALUES ('grouped', 50, NOW() + INTERVAL '1 hour') RETURNING id
+		INSERT INTO ride_groups (status, route_score, arrive_by) VALUES ('grouped', 50, NOW() + INTERVAL '1 hour') RETURNING id
 	`).Scan(&groupID))
 
 	// Add 4 members to max it out

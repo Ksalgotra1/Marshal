@@ -80,13 +80,13 @@ func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher) {
 		timeout := DynamicTimeout(group.ArriveBy)
 		slog.Info("assigner: group dispatching",
 			"group_id", group.ID,
-			"score", group.ConfidenceScore,
+			"score", group.RouteScore,
 			"attempt", group.DispatchAttempts+1,
 			"timeout", timeout,
 		)
 
 		if events != nil {
-			event := realtime.GroupDispatching(group.ID, group.DispatchAttempts+1, group.ConfidenceScore)
+			event := realtime.GroupDispatching(group.ID, group.DispatchAttempts+1, group.RouteScore)
 			events.BroadcastMulti([]string{"global", group.ID}, event)
 		}
 	}

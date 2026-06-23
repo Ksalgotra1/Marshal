@@ -28,11 +28,11 @@ CREATE TABLE ride_requests (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Ride groups (formed by grouper, priority-queued by confidence_score)
+-- Ride groups (formed by grouper, priority-queued by route_score)
 CREATE TABLE ride_groups (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     status              TEXT NOT NULL DEFAULT 'grouped',
-    confidence_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    route_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
     arrive_by           TIMESTAMPTZ NOT NULL,
     expected_departure  TIMESTAMPTZ,
     driver_id           UUID REFERENCES drivers(id),
@@ -84,7 +84,7 @@ CREATE INDEX idx_requests_status_h3 ON ride_requests(status, pickup_h3);
 
 -- Assigner: priority queue (THE max-heap)
 CREATE INDEX idx_groups_priority_queue
-    ON ride_groups(confidence_score DESC)
+    ON ride_groups(route_score DESC)
     WHERE status = 'grouped' AND driver_id IS NULL;
 
 -- Driver assignment lookups

@@ -32,7 +32,7 @@ func (s *GroupStore) Create(ctx context.Context, members []models.RideRequest, s
 
 	var groupID string
 	err := s.DB.QueryRow(ctx, `
-		INSERT INTO ride_groups (confidence_score, arrive_by)
+		INSERT INTO ride_groups (route_score, arrive_by)
 		VALUES ($1, $2)
 		RETURNING id
 	`, score, arriveBy).Scan(&groupID)
@@ -61,11 +61,11 @@ func (s *GroupStore) Create(ctx context.Context, members []models.RideRequest, s
 // ListOpen returns groups still accepting members (status=grouped, no driver yet).
 func (s *GroupStore) ListOpen(ctx context.Context) ([]models.RideGroup, error) {
 	rows, err := s.DB.Query(ctx, `
-		SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
+		SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups
 		WHERE status = 'grouped' AND driver_id IS NULL AND arrive_by > NOW()
-		ORDER BY confidence_score DESC
+		ORDER BY route_score DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("GroupStore.ListOpen: %w", err)
@@ -83,7 +83,7 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 		f.Offset = 0
 	}
 
-	query := `SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
+	query := `SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
 	                 dispatch_attempts, telegram_msg_id, created_at, updated_at
 	          FROM ride_groups`
 	args := []any{}
@@ -95,7 +95,7 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 		argIdx++
 	}
 
-	query += ` ORDER BY confidence_score DESC, created_at DESC LIMIT $` + strconv.Itoa(argIdx)
+	query += ` ORDER BY route_score DESC, created_at DESC LIMIT $` + strconv.Itoa(argIdx)
 	args = append(args, f.Limit)
 	argIdx++
 	query += ` OFFSET $` + strconv.Itoa(argIdx)
@@ -113,11 +113,11 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 func (s *GroupStore) GetByID(ctx context.Context, id string) (*models.RideGroup, error) {
 	var g models.RideGroup
 	err := s.DB.QueryRow(ctx, `
-		SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
+		SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups WHERE id = $1
 	`, id).Scan(
-		&g.ID, &g.Status, &g.ConfidenceScore, &g.ArriveBy, &g.ExpectedDeparture,
+		&g.ID, &g.Status, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
 		&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
 	)
 	if err != nil {
@@ -174,15 +174,15 @@ func (s *GroupStore) GetByIDWithMembers(ctx context.Context, id string) (*GroupD
 func (s *GroupStore) PopHighestScore(ctx context.Context) (*models.RideGroup, error) {
 	var g models.RideGroup
 	err := s.DB.QueryRow(ctx, `
-		SELECT id, status, confidence_score, arrive_by, expected_departure, driver_id,
+		SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups
 		WHERE status = 'grouped' AND driver_id IS NULL
-		ORDER BY confidence_score DESC
+		ORDER BY route_score DESC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
 	`).Scan(
-		&g.ID, &g.Status, &g.ConfidenceScore, &g.ArriveBy, &g.ExpectedDeparture,
+		&g.ID, &g.Status, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
 		&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
 	)
 	if err != nil {
@@ -234,10 +234,10 @@ func (s *GroupStore) GetMemberRequestIDs(ctx context.Context, groupID string) ([
 	return ids, nil
 }
 
-// UpdateScore recalculates and persists the confidence_score after a member joins.
+// UpdateScore recalculates and persists the route_score after a member joins.
 func (s *GroupStore) UpdateScore(ctx context.Context, groupID string, score float64) error {
 	_, err := s.DB.Exec(ctx,
-		`UPDATE ride_groups SET confidence_score = $1, updated_at = NOW() WHERE id = $2`,
+		`UPDATE ride_groups SET route_score = $1, updated_at = NOW() WHERE id = $2`,
 		score, groupID,
 	)
 	return err
@@ -315,7 +315,7 @@ func scanGroups(rows interface {
 		var g models.RideGroup
 		var expectedDep *time.Time
 		if err := rows.Scan(
-			&g.ID, &g.Status, &g.ConfidenceScore, &g.ArriveBy, &expectedDep,
+			&g.ID, &g.Status, &g.RouteScore, &g.ArriveBy, &expectedDep,
 			&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
 		); err != nil {
 			return nil, err

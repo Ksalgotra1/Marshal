@@ -122,7 +122,7 @@ func (s *AssignerIntegrationSuite) createGroup(score float64) string {
 func (s *AssignerIntegrationSuite) insertRawGroup(status string, attempts int, arriveBy, updatedAt time.Time, score float64) string {
 	var id string
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
-		INSERT INTO ride_groups (status, dispatch_attempts, arrive_by, updated_at, confidence_score)
+		INSERT INTO ride_groups (status, dispatch_attempts, arrive_by, updated_at, route_score)
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id
 	`, status, attempts, arriveBy, updatedAt, score).Scan(&id))
