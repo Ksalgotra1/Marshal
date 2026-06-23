@@ -3,6 +3,7 @@ package realtime
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,6 +137,7 @@ func drainUntilType(t *testing.T, client *fakeStream, eventType string) Event {
 func (s *HubUnitSuite) TestConcurrentConnectsAndDisconnects() {
 	var wg sync.WaitGroup
 	numClients := 50
+	var evictedCount int32
 
 	// Concurrent registers
 	for i := 0; i < numClients; i++ {
@@ -143,13 +145,32 @@ func (s *HubUnitSuite) TestConcurrentConnectsAndDisconnects() {
 		go func(id int) {
 			defer wg.Done()
 			client := newFakeStream([]string{"global", "concurrent-room"}, 10)
+			done := make(chan struct{})
+
+			// Fast-draining goroutine
+			go func() {
+				for {
+					select {
+					case <-client.send:
+					case <-done:
+						return
+					}
+				}
+			}()
+
 			s.hub.RegisterStreamClient(client)
 			
 			// Simulate a brief connection
 			time.Sleep(5 * time.Millisecond)
 			
+			// Check if evicted prematurely
+			if client.isClosed() {
+				atomic.AddInt32(&evictedCount, 1)
+			}
+
 			// Concurrent unregisters
 			s.hub.UnregisterStreamClient(client)
+			close(done)
 		}(i)
 	}
 
@@ -157,6 +178,9 @@ func (s *HubUnitSuite) TestConcurrentConnectsAndDisconnects() {
 	
 	// Ensure connection count goes back to 0 cleanly without panics or races
 	s.Eventually(func() bool { return s.hub.ConnectionCount() == 0 }, time.Second, 10*time.Millisecond)
+
+	// Assert that fast-draining clients are NEVER evicted
+	s.Equal(0, int(evictedCount), "Should have exactly 0 evictions for fast-draining clients")
 }
 
 func (s *HubUnitSuite) TestGhostRoomBroadcast() {

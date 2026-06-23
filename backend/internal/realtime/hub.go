@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -28,6 +29,7 @@ type Hub struct {
 	unregister    chan *Client
 	sseRegister   chan StreamClient
 	sseUnregister chan StreamClient
+	dirtyRooms    map[string]bool
 }
 
 func NewHub() *Hub {
@@ -38,10 +40,14 @@ func NewHub() *Hub {
 		unregister:    make(chan *Client),
 		sseRegister:   make(chan StreamClient),
 		sseUnregister: make(chan StreamClient),
+		dirtyRooms:    make(map[string]bool),
 	}
 }
 
 func (h *Hub) Run() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case client := <-h.register:
@@ -51,10 +57,10 @@ func (h *Hub) Run() {
 					h.rooms[room] = make(map[*Client]bool)
 				}
 				h.rooms[room][client] = true
+				h.dirtyRooms[room] = true
 			}
 			h.mu.Unlock()
 			slog.Info("ws: client connected", "rooms", client.rooms)
-			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
 
 		case client := <-h.sseRegister:
 			h.mu.Lock()
@@ -63,10 +69,10 @@ func (h *Hub) Run() {
 					h.streams[room] = make(map[StreamClient]bool)
 				}
 				h.streams[room][client] = true
+				h.dirtyRooms[room] = true
 			}
 			h.mu.Unlock()
 			slog.Info("sse: client connected", "rooms", client.Rooms())
-			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -74,6 +80,7 @@ func (h *Hub) Run() {
 				if clients, ok := h.rooms[room]; ok {
 					if _, exists := clients[client]; exists {
 						delete(clients, client)
+						h.dirtyRooms[room] = true
 						if len(clients) == 0 {
 							delete(h.rooms, room)
 						}
@@ -83,7 +90,6 @@ func (h *Hub) Run() {
 			close(client.send)
 			h.mu.Unlock()
 			slog.Info("ws: client disconnected", "rooms", client.rooms)
-			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
 
 		case client := <-h.sseUnregister:
 			h.mu.Lock()
@@ -91,6 +97,7 @@ func (h *Hub) Run() {
 				if clients, ok := h.streams[room]; ok {
 					if _, exists := clients[client]; exists {
 						delete(clients, client)
+						h.dirtyRooms[room] = true
 						if len(clients) == 0 {
 							delete(h.streams, room)
 						}
@@ -100,7 +107,24 @@ func (h *Hub) Run() {
 			client.Close()
 			h.mu.Unlock()
 			slog.Info("sse: client disconnected", "rooms", client.Rooms())
-			h.Broadcast("global", SystemConnections(h.ConnectionCount()))
+
+		case <-ticker.C:
+			h.mu.Lock()
+			dirty := make([]string, 0, len(h.dirtyRooms))
+			for room := range h.dirtyRooms {
+				dirty = append(dirty, room)
+			}
+			// Clear dirty flag for next tick
+			h.dirtyRooms = make(map[string]bool)
+			h.mu.Unlock()
+
+			if len(dirty) > 0 {
+				count := h.ConnectionCount()
+				event := SystemConnections(count)
+				for _, room := range dirty {
+					h.Broadcast(room, event)
+				}
+			}
 		}
 	}
 }
