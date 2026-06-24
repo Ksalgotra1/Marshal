@@ -16,9 +16,10 @@ type Config struct {
 	DatabaseURL         string
 	AllowedOrigin       string
 	LogFormat           string
-	TelegramBotToken    string
-	TelegramDriverGroup string
-	TelegramWebhookURL  string
+	TelegramBotToken      string
+	TelegramDriverGroup   string
+	TelegramWebhookURL    string
+	TelegramWebhookSecret string
 }
 
 // Load reads environment variables into a Config struct.
@@ -31,9 +32,10 @@ func Load() *Config {
 		DatabaseURL:         getEnvOr("DATABASE_URL", "postgres://marshal:marshal_secret@localhost:5433/marshal_db?sslmode=disable"),
 		AllowedOrigin:       getEnvOr("ALLOWED_ORIGIN", "http://localhost:5173"),
 		LogFormat:           getEnvOr("LOG_FORMAT", "text"),
-		TelegramBotToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramDriverGroup: os.Getenv("TELEGRAM_DRIVER_GROUP_ID"),
-		TelegramWebhookURL:  os.Getenv("TELEGRAM_WEBHOOK_URL"),
+		TelegramBotToken:      os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramDriverGroup:   os.Getenv("TELEGRAM_DRIVER_GROUP_ID"),
+		TelegramWebhookURL:    os.Getenv("TELEGRAM_WEBHOOK_URL"),
+		TelegramWebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
 	}
 }
 

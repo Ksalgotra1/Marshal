@@ -31,13 +31,20 @@ func (s *AssignerIntegrationSuite) SetupSuite() {
 func (s *AssignerIntegrationSuite) SetupTest() {
 	testdb.Truncate(s.ctx, s.T(), s.db.Pool)
 	s.events = &recordingPublisher{}
+
+	// Add an online driver so standard dispatch tests proceed
+	var driverID string
+	err := s.db.Pool.QueryRow(s.ctx, `
+		INSERT INTO drivers (name, telegram_id, status) VALUES ('Test Driver', 12345, 'online') RETURNING id
+	`).Scan(&driverID)
+	s.Require().NoError(err)
 }
 
 func (s *AssignerIntegrationSuite) TestRunDispatchesGroupedPriorityQueueAndBroadcasts() {
 	lowID := s.createGroup(10)
 	highID := s.createGroup(95)
 
-	Run(s.ctx, s.db.Pool, s.events)
+	Run(s.ctx, s.db.Pool, s.events, nil)
 
 	statuses := s.groupStatuses()
 	s.Equal("dispatching", statuses[lowID])
@@ -53,7 +60,7 @@ func (s *AssignerIntegrationSuite) TestRunCancelsMaxRetriesAndRedispatchesTimedO
 	cancelID := s.insertRawGroup("dispatching", 3, time.Now().Add(time.Hour), time.Now().Add(-10*time.Minute), 50)
 	timedOutID := s.insertRawGroup("dispatching", 1, time.Now().Add(time.Hour), time.Now().Add(-10*time.Minute), 60)
 
-	Run(s.ctx, s.db.Pool, s.events)
+	Run(s.ctx, s.db.Pool, s.events, nil)
 
 	statuses := s.groupStatuses()
 	s.Equal("cancelled", statuses[cancelID])
@@ -68,7 +75,7 @@ func (s *AssignerIntegrationSuite) TestAssignerPrioritizesFastTrackOverHigherSco
 	normalID := s.insertRawGroupPriority("grouped", 0, time.Now().Add(time.Hour), time.Now(), 90, models.PriorityNormal)
 	fastID := s.insertRawGroupPriority("grouped", 0, time.Now().Add(time.Hour), time.Now(), 20, models.PriorityHigh)
 
-	Run(s.ctx, s.db.Pool, s.events)
+	Run(s.ctx, s.db.Pool, s.events, nil)
 
 	s.Len(s.events.events, 2)
 	s.Equal("group:dispatching", s.events.events[0].Type)
@@ -92,11 +99,11 @@ func (s *AssignerIntegrationSuite) TestRunConcurrentLockContention() {
 	// Run two assigner loops concurrently
 	done := make(chan struct{})
 	go func() {
-		Run(s.ctx, s.db.Pool, s.events)
+		Run(s.ctx, s.db.Pool, s.events, nil)
 		done <- struct{}{}
 	}()
 	go func() {
-		Run(s.ctx, s.db.Pool, s.events)
+		Run(s.ctx, s.db.Pool, s.events, nil)
 		done <- struct{}{}
 	}()
 
@@ -108,6 +115,18 @@ func (s *AssignerIntegrationSuite) TestRunConcurrentLockContention() {
 	var dispatchingCount int
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `SELECT COUNT(*) FROM ride_groups WHERE status = 'dispatching'`).Scan(&dispatchingCount))
 	s.Equal(5, dispatchingCount)
+}
+
+func (s *AssignerIntegrationSuite) TestAssignerSkipsCycleWhenNoDriversOnline() {
+	// Set driver offline
+	_, err := s.db.Pool.Exec(s.ctx, `UPDATE drivers SET status = 'offline'`)
+	s.Require().NoError(err)
+
+	s.createGroup(10) // Create grouped ride
+
+	Run(s.ctx, s.db.Pool, s.events, nil) // No drivers online
+
+	s.Empty(s.events.events) // Nothing should have been dispatched
 }
 
 func (s *AssignerIntegrationSuite) createGroup(score float64) string {
@@ -135,20 +154,20 @@ func (s *AssignerIntegrationSuite) createGroup(score float64) string {
 func (s *AssignerIntegrationSuite) insertRawGroup(status string, attempts int, arriveBy, updatedAt time.Time, score float64) string {
 	var id string
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
-		INSERT INTO ride_groups (status, dispatch_attempts, arrive_by, updated_at, route_score)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO ride_groups (status, dispatch_attempts, arrive_by, updated_at, dispatch_timeout_at, route_score)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id
-	`, status, attempts, arriveBy, updatedAt, score).Scan(&id))
+	`, status, attempts, arriveBy, updatedAt, updatedAt, score).Scan(&id))
 	return id
 }
 
 func (s *AssignerIntegrationSuite) insertRawGroupPriority(status string, attempts int, arriveBy, updatedAt time.Time, score float64, priority string) string {
 	var id string
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
-		INSERT INTO ride_groups (status, dispatch_attempts, arrive_by, updated_at, route_score, priority)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO ride_groups (status, dispatch_attempts, arrive_by, updated_at, dispatch_timeout_at, route_score, priority)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
-	`, status, attempts, arriveBy, updatedAt, score, priority).Scan(&id))
+	`, status, attempts, arriveBy, updatedAt, updatedAt, score, priority).Scan(&id))
 	return id
 }
 

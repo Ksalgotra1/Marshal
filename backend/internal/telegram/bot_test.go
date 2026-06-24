@@ -1,0 +1,256 @@
+package telegram
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/Ksalgotra1/Marshal/internal/models"
+	"github.com/Ksalgotra1/Marshal/internal/store"
+	"github.com/stretchr/testify/assert"
+)
+
+type fakeGroupStore struct {
+	claimGroupFunc         func(ctx context.Context, groupID, driverID string) (int64, error)
+	getByIDWithMembersFunc func(ctx context.Context, id string) (*store.GroupDetail, error)
+}
+
+func (f *fakeGroupStore) ClaimGroup(ctx context.Context, groupID, driverID string) (int64, error) {
+	return f.claimGroupFunc(ctx, groupID, driverID)
+}
+
+func (f *fakeGroupStore) GetByIDWithMembers(ctx context.Context, id string) (*store.GroupDetail, error) {
+	return f.getByIDWithMembersFunc(ctx, id)
+}
+
+type fakeDriverStore struct {
+	getByTelegramIDFunc func(ctx context.Context, telegramID int64) (*models.Driver, error)
+	setTelegramChatFunc func(ctx context.Context, telegramID int64, chatID int64) error
+	setStatusFunc       func(ctx context.Context, id, status string) error
+}
+
+func (f *fakeDriverStore) GetByTelegramID(ctx context.Context, telegramID int64) (*models.Driver, error) {
+	return f.getByTelegramIDFunc(ctx, telegramID)
+}
+
+func (f *fakeDriverStore) SetTelegramChat(ctx context.Context, telegramID int64, chatID int64) error {
+	return f.setTelegramChatFunc(ctx, telegramID, chatID)
+}
+
+func (f *fakeDriverStore) SetStatus(ctx context.Context, id, status string) error {
+	return f.setStatusFunc(ctx, id, status)
+}
+
+func TestHandleUpdateStart(t *testing.T) {
+	var chatSet bool
+	ds := &fakeDriverStore{
+		setTelegramChatFunc: func(ctx context.Context, telegramID, chatID int64) error {
+			assert.Equal(t, int64(123), telegramID)
+			assert.Equal(t, int64(456), chatID)
+			chatSet = true
+			return nil
+		},
+	}
+	gs := &fakeGroupStore{}
+
+	var msgSent bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "sendMessage") {
+			var req sendMessageRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			assert.Equal(t, int64(456), req.ChatID)
+			assert.Contains(t, req.Text, "Registered")
+			msgSent = true
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true}`))
+		}
+	}))
+	defer server.Close()
+
+	bot := New("token", 789, gs, ds)
+	bot.baseURL = server.URL
+
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{ID: 456},
+			From: User{ID: 123},
+			Text: "/start",
+		},
+	})
+
+	assert.True(t, chatSet)
+	assert.True(t, msgSent)
+}
+
+func TestHandleUpdateAcceptWinsRace(t *testing.T) {
+	var statusSet bool
+	ds := &fakeDriverStore{
+		getByTelegramIDFunc: func(ctx context.Context, telegramID int64) (*models.Driver, error) {
+			return &models.Driver{ID: "driver1", Name: "Bob"}, nil
+		},
+		setStatusFunc: func(ctx context.Context, id, status string) error {
+			assert.Equal(t, "driver1", id)
+			assert.Equal(t, "busy", status)
+			statusSet = true
+			return nil
+		},
+	}
+	gs := &fakeGroupStore{
+		claimGroupFunc: func(ctx context.Context, groupID, driverID string) (int64, error) {
+			assert.Equal(t, "group1", groupID)
+			assert.Equal(t, "driver1", driverID)
+			return 1, nil
+		},
+		getByIDWithMembersFunc: func(ctx context.Context, id string) (*store.GroupDetail, error) {
+			return &store.GroupDetail{
+				Members: []models.RideRequest{
+					{ID: "req1", RequesterName: "Alice", PickupLat: 30.0, PickupLng: 76.0, DropoffLat: 30.1, DropoffLng: 76.1},
+				},
+			}, nil
+		},
+	}
+
+	var edited bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "editMessageText") {
+			var req editMessageTextRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			assert.Contains(t, req.Text, "✅ Accepted by Bob")
+			edited = true
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	bot := New("token", 789, gs, ds)
+	bot.baseURL = server.URL
+
+	bot.HandleUpdate(context.Background(), Update{
+		CallbackQuery: &CallbackQuery{
+			ID:   "cb1",
+			From: User{ID: 123},
+			Data: "accept:group1",
+			Message: &Message{
+				MessageID: 55,
+			},
+		},
+	})
+
+	assert.True(t, statusSet)
+	assert.True(t, edited)
+}
+
+func TestHandleUpdateAcceptLosesRace(t *testing.T) {
+	ds := &fakeDriverStore{
+		getByTelegramIDFunc: func(ctx context.Context, telegramID int64) (*models.Driver, error) {
+			return &models.Driver{ID: "driver1", Name: "Bob"}, nil
+		},
+	}
+	gs := &fakeGroupStore{
+		claimGroupFunc: func(ctx context.Context, groupID, driverID string) (int64, error) {
+			return 0, nil // lost race
+		},
+	}
+
+	var edited bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "editMessageText") {
+			var req editMessageTextRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			assert.Contains(t, req.Text, "⚠️ Already taken by another driver")
+			edited = true
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	bot := New("token", 789, gs, ds)
+	bot.baseURL = server.URL
+
+	bot.HandleUpdate(context.Background(), Update{
+		CallbackQuery: &CallbackQuery{
+			ID:   "cb1",
+			From: User{ID: 123},
+			Data: "accept:group1",
+			Message: &Message{
+				MessageID: 55,
+			},
+		},
+	})
+
+	assert.True(t, edited)
+}
+
+func TestHandleUpdatePass(t *testing.T) {
+	ds := &fakeDriverStore{}
+	gs := &fakeGroupStore{}
+
+	var answered bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "answerCallbackQuery") {
+			answered = true
+			w.WriteHeader(http.StatusOK)
+		} else {
+			t.Errorf("Unexpected API call to %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	bot := New("token", 789, gs, ds)
+	bot.baseURL = server.URL
+
+	bot.HandleUpdate(context.Background(), Update{
+		CallbackQuery: &CallbackQuery{
+			ID:   "cb1",
+			From: User{ID: 123},
+			Data: "pass:group1",
+		},
+	})
+
+	assert.True(t, answered)
+}
+
+func TestHandleUpdateUnregisteredDriver(t *testing.T) {
+	ds := &fakeDriverStore{
+		getByTelegramIDFunc: func(ctx context.Context, telegramID int64) (*models.Driver, error) {
+			return nil, fmt.Errorf("not found")
+		},
+	}
+	gs := &fakeGroupStore{}
+
+	var answeredWithText bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "answerCallbackQuery") {
+			var req answerCallbackQueryRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			if req.Text == "You are not registered as a driver" {
+				answeredWithText = true
+			}
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	bot := New("token", 789, gs, ds)
+	bot.baseURL = server.URL
+
+	bot.HandleUpdate(context.Background(), Update{
+		CallbackQuery: &CallbackQuery{
+			ID:   "cb1",
+			From: User{ID: 123},
+			Data: "accept:group1",
+		},
+	})
+
+	assert.True(t, answeredWithText)
+}

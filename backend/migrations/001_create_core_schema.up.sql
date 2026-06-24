@@ -39,6 +39,7 @@ CREATE TABLE ride_groups (
     driver_id           UUID REFERENCES drivers(id),
     dispatch_attempts   INT NOT NULL DEFAULT 0,
     telegram_msg_id     INT,
+    dispatch_timeout_at TIMESTAMPTZ,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

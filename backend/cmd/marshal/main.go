@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/sse"
 	"github.com/Ksalgotra1/Marshal/internal/store"
+	"github.com/Ksalgotra1/Marshal/internal/telegram"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -40,6 +42,30 @@ func main() {
 	realtimeHub := realtime.NewHub()
 	go realtimeHub.Run()
 
+	var bot *telegram.Bot
+	if cfg.TelegramBotToken != "" {
+		gs := &store.GroupStore{DB: pool}
+		ds := &store.DriverStore{DB: pool}
+		bot = telegram.New(cfg.TelegramBotToken, mustParseInt64(cfg.TelegramDriverGroup), gs, ds)
+	}
+
+	mux := http.NewServeMux()
+
+	if bot != nil {
+		if cfg.TelegramWebhookURL != "" {
+			if err := bot.RegisterWebhook(ctx, cfg.TelegramWebhookURL, cfg.TelegramWebhookSecret); err != nil {
+				slog.Error("failed to register webhook", "error", err)
+				os.Exit(1)
+			}
+			mux.Handle("POST /telegram/webhook", telegram.NewWebhookHandler(bot, cfg.TelegramWebhookSecret))
+		} else {
+			if err := bot.DeleteWebhook(ctx); err != nil {
+				slog.Warn("deleteWebhook failed (may not have been set)", "error", err)
+			}
+			go bot.StartPolling(ctx)
+		}
+	}
+
 	// Start background workers
 	go worker.Run(ctx, worker.Config{
 		Name:     "grouper",
@@ -56,12 +82,10 @@ func main() {
 		Channel:  "assigner_wakeup",
 		Interval: 30 * time.Second,
 		Pool:     pool,
-		Process:  assigner.NewProcess(realtimeHub),
+		Process:  assigner.NewProcess(realtimeHub, bot),
 	})
 
 	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx, Events: realtimeHub, WebSocket: realtimeHub}
-
-	mux := http.NewServeMux()
 
 	// Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +142,15 @@ func main() {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func mustParseInt64(s string) int64 {
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		slog.Error("invalid int64 config value", "value", s)
+		os.Exit(1)
+	}
+	return n
 }
 
 // grouperProcess runs the H3 bucketing engine, then wakes the assigner.

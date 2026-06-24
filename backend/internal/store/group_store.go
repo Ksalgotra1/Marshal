@@ -269,16 +269,15 @@ func (s *GroupStore) ClaimGroup(ctx context.Context, groupID, driverID string) (
 	return cmd.RowsAffected(), nil
 }
 
-// RevertTimedOut reverts groups stuck in 'dispatching' past the given timeout back to 'grouped'.
-// Returns the IDs of reverted groups so the assigner can re-dispatch them.
-func (s *GroupStore) RevertTimedOut(ctx context.Context, timeout time.Duration) ([]string, error) {
+// RevertTimedOut reverts groups stuck in 'dispatching' past their dispatch_timeout_at.
+func (s *GroupStore) RevertTimedOut(ctx context.Context) ([]string, error) {
 	rows, err := s.DB.Query(ctx, `
 		UPDATE ride_groups
 		SET status = 'grouped', updated_at = NOW()
-		WHERE status = 'dispatching' AND updated_at < NOW() - $1::interval
+		WHERE status = 'dispatching' AND dispatch_timeout_at < NOW()
 		  AND dispatch_attempts < 3
 		RETURNING id
-	`, timeout.String())
+	`)
 	if err != nil {
 		return nil, fmt.Errorf("GroupStore.RevertTimedOut: %w", err)
 	}
@@ -324,4 +323,16 @@ func scanGroups(rows interface {
 		groups = append(groups, g)
 	}
 	return groups, nil
+}
+
+// SetTelegramMsgID updates the group's telegram_msg_id.
+func (s *GroupStore) SetTelegramMsgID(ctx context.Context, groupID string, msgID int) error {
+	_, err := s.DB.Exec(ctx, `UPDATE ride_groups SET telegram_msg_id = $1 WHERE id = $2`, msgID, groupID)
+	return err
+}
+
+// SetDispatchTimeoutAt sets the group's dispatch_timeout_at.
+func (s *GroupStore) SetDispatchTimeoutAt(ctx context.Context, groupID string, deadline time.Time) error {
+	_, err := s.DB.Exec(ctx, `UPDATE ride_groups SET dispatch_timeout_at = $1 WHERE id = $2`, deadline, groupID)
+	return err
 }

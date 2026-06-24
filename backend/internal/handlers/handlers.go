@@ -316,6 +316,7 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 		driverName = driver.Name
 	}
 
+	var mapsLink, msg string
 	detail, err := gs.GetByIDWithMembers(r.Context(), groupID)
 	if err == nil {
 		var stops []dispatch.Stop
@@ -334,9 +335,8 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 		if seq, err := dispatch.OptimalStopSequence(stops); err == nil {
-			mapsLink := dispatch.BuildMapsDeepLink(0, 0, seq)
-			msg := dispatch.FormatDispatchMessage(seq, mapsLink)
-			slog.Info("dispatch message generated", "msg", msg)
+			mapsLink = dispatch.BuildMapsDeepLink(seq)
+			msg = dispatch.FormatDispatchMessage(seq, mapsLink)
 		}
 	}
 
@@ -349,9 +349,11 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api.WriteJSON(w, http.StatusOK, api.JSON{
-		"claimed":   true,
-		"group_id":  groupID,
-		"driver_id": body.DriverID,
+		"claimed":          true,
+		"group_id":         groupID,
+		"driver_id":        body.DriverID,
+		"maps_link":        mapsLink,
+		"dispatch_message": msg,
 	})
 }
 

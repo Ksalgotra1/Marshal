@@ -87,3 +87,29 @@ func (s *DriverStore) SetStatus(ctx context.Context, id, status string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE drivers SET status = $1 WHERE id = $2`, status, id)
 	return err
 }
+
+// GetByTelegramID fetches a single driver by Telegram ID.
+func (s *DriverStore) GetByTelegramID(ctx context.Context, telegramID int64) (*models.Driver, error) {
+	var d models.Driver
+	err := s.DB.QueryRow(ctx, `
+		SELECT id, name, telegram_id, telegram_chat, status, created_at
+		FROM drivers WHERE telegram_id = $1
+	`, telegramID).Scan(&d.ID, &d.Name, &d.TelegramID, &d.TelegramChat, &d.Status, &d.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("DriverStore.GetByTelegramID: %w", err)
+	}
+	return &d, nil
+}
+
+// SetTelegramChat updates the driver's private chat ID.
+func (s *DriverStore) SetTelegramChat(ctx context.Context, telegramID int64, chatID int64) error {
+	_, err := s.DB.Exec(ctx, `UPDATE drivers SET telegram_chat = $1 WHERE telegram_id = $2`, chatID, telegramID)
+	return err
+}
+
+// CountOnline returns the number of online drivers.
+func (s *DriverStore) CountOnline(ctx context.Context) (int, error) {
+	var count int
+	err := s.DB.QueryRow(ctx, `SELECT COUNT(*) FROM drivers WHERE status = 'online'`).Scan(&count)
+	return count, err
+}

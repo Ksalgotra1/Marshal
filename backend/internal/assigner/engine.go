@@ -6,6 +6,8 @@ import (
 	"math"
 	"time"
 
+	"github.com/Ksalgotra1/Marshal/internal/dispatch"
+	"github.com/Ksalgotra1/Marshal/internal/geo"
 	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
@@ -16,12 +18,16 @@ type EventPublisher interface {
 	BroadcastMulti([]string, realtime.Event)
 }
 
+type Dispatcher interface {
+	SendDispatch(ctx context.Context, groupID, msg string) (int, error)
+}
+
 // Run processes all assignable groups in one cycle:
 // 1. Cancel groups that exceeded max retries (3 attempts)
 // 2. Revert timed-out dispatching groups back to 'grouped'
 // 3. Pop highest-score group from priority queue
 // 4. Mark it as 'dispatching' — drivers can now claim it
-func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher) {
+func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher, bot Dispatcher) {
 	gs := &store.GroupStore{DB: pool}
 
 	// Step 1: Cancel groups with 3+ failed attempts
@@ -33,12 +39,22 @@ func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher) {
 	}
 
 	// Step 2: Revert timed-out dispatching groups
-	// Use a fixed 5-min timeout for now; dynamic timeout per-group comes with Telegram
-	reverted, err := gs.RevertTimedOut(ctx, 5*time.Minute)
+	reverted, err := gs.RevertTimedOut(ctx)
 	if err != nil {
 		slog.Error("assigner: revert timed out failed", "error", err)
 	} else if len(reverted) > 0 {
 		slog.Info("assigner: reverted timed-out groups", "count", len(reverted), "ids", reverted)
+	}
+
+	ds := &store.DriverStore{DB: pool}
+	count, err := ds.CountOnline(ctx)
+	if err != nil {
+		slog.Error("assigner: failed to count online drivers", "error", err)
+		return
+	}
+	if count == 0 {
+		slog.Info("assigner: no online drivers, skipping cycle")
+		return
 	}
 
 	// Step 3: Pop and dispatch all available groups
@@ -78,6 +94,46 @@ func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher) {
 		}
 
 		timeout := DynamicTimeout(group.ArriveBy)
+
+		gs2 := &store.GroupStore{DB: pool}
+		_ = gs2.SetDispatchTimeoutAt(ctx, group.ID, time.Now().Add(timeout))
+
+		detail, err := gs2.GetByIDWithMembers(ctx, group.ID)
+		if err != nil {
+			slog.Error("assigner: failed to fetch group members", "error", err)
+		} else {
+			var stops []dispatch.Stop
+			for _, m := range detail.Members {
+				stops = append(stops, dispatch.Stop{
+					StudentID: m.ID,
+					Name:      m.RequesterName,
+					LatLng:    geo.LatLng{Lat: m.PickupLat, Lng: m.PickupLng},
+					Type:      dispatch.Pickup,
+				})
+				stops = append(stops, dispatch.Stop{
+					StudentID: m.ID,
+					Name:      m.RequesterName,
+					LatLng:    geo.LatLng{Lat: m.DropoffLat, Lng: m.DropoffLng},
+					Type:      dispatch.Dropoff,
+				})
+			}
+
+			seq, err := dispatch.OptimalStopSequence(stops)
+			if err == nil {
+				mapsLink := dispatch.BuildMapsDeepLink(seq)
+				msg := dispatch.FormatDispatchMessage(seq, mapsLink)
+
+				if bot != nil {
+					msgID, err := bot.SendDispatch(ctx, group.ID, msg)
+					if err != nil {
+						slog.Error("assigner: telegram send failed", "error", err)
+					} else {
+						_ = gs2.SetTelegramMsgID(ctx, group.ID, msgID)
+					}
+				}
+			}
+		}
+
 		slog.Info("assigner: group dispatching",
 			"group_id", group.ID,
 			"score", group.RouteScore,
@@ -111,9 +167,9 @@ func DynamicTimeout(arriveBy time.Time) time.Duration {
 }
 
 // NewProcess creates a worker.ProcessFunc with event publishing injected.
-func NewProcess(events EventPublisher) worker.ProcessFunc {
+func NewProcess(events EventPublisher, bot Dispatcher) worker.ProcessFunc {
 	return func(ctx context.Context, pool *pgxpool.Pool, payload []byte) error {
-		Run(ctx, pool, events)
+		Run(ctx, pool, events, bot)
 		worker.Notify(ctx, pool, "assigner_wakeup")
 		return nil
 	}

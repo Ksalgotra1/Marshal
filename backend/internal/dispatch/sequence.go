@@ -87,15 +87,14 @@ func routeCost(seq []Stop) float64 {
 	return cost
 }
 
-func BuildMapsDeepLink(driverLat, driverLng float64, seq []Stop) string {
+func BuildMapsDeepLink(seq []Stop) string {
 	if len(seq) == 0 {
 		return ""
 	}
 
-	origin := fmt.Sprintf("%f,%f", driverLat, driverLng)
 	destination := fmt.Sprintf("%f,%f", seq[len(seq)-1].LatLng.Lat, seq[len(seq)-1].LatLng.Lng)
 
-	link := fmt.Sprintf("https://www.google.com/maps/dir/?api=1&origin=%s&destination=%s&travelmode=driving", url.QueryEscape(origin), url.QueryEscape(destination))
+	link := fmt.Sprintf("https://www.google.com/maps/dir/?api=1&destination=%s&travelmode=driving", url.QueryEscape(destination))
 
 	if len(seq) > 1 {
 		var waypoints []string
