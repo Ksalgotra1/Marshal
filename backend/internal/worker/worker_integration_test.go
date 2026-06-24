@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/testdb"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,8 +36,8 @@ func (s *WorkerIntegrationSuite) SetupTest() {
 
 func (s *WorkerIntegrationSuite) TestWorker_DrainSuccess() {
 	js := &store.JobStore{DB: s.db.Pool}
-	
-	_, err := js.Enqueue(s.ctx, "test_job", map[string]string{"key": "value"}, time.Now().Add(-24*time.Hour))
+
+	_, err := js.Enqueue(s.ctx, "test_job", map[string]string{"key": "value"}, models.PriorityNormal, time.Now().Add(-24*time.Hour))
 	s.Require().NoError(err)
 
 	called := false
@@ -66,8 +67,8 @@ func (s *WorkerIntegrationSuite) TestWorker_DrainSuccess() {
 
 func (s *WorkerIntegrationSuite) TestWorker_DrainError() {
 	js := &store.JobStore{DB: s.db.Pool}
-	
-	_, err := js.Enqueue(s.ctx, "test_job_fail", map[string]string{"fail": "true"}, time.Now().Add(-24*time.Hour))
+
+	_, err := js.Enqueue(s.ctx, "test_job_fail", map[string]string{"fail": "true"}, models.PriorityNormal, time.Now().Add(-24*time.Hour))
 	s.Require().NoError(err)
 
 	mockProcess := func(ctx context.Context, pool *pgxpool.Pool, payload []byte) error {
@@ -91,11 +92,11 @@ func (s *WorkerIntegrationSuite) TestWorker_DrainError() {
 
 func (s *WorkerIntegrationSuite) TestWorker_NotifyPropagation() {
 	notifyChan := make(chan struct{}, 1)
-	
+
 	// Start listener in background
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
-	
+
 	go listen(ctx, s.db.Pool, "test_channel", notifyChan)
 
 	// Give it a split second to execute LISTEN

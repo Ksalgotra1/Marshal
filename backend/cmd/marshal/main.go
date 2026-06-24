@@ -14,6 +14,7 @@ import (
 	"github.com/Ksalgotra1/Marshal/internal/config"
 	"github.com/Ksalgotra1/Marshal/internal/grouper"
 	"github.com/Ksalgotra1/Marshal/internal/handlers"
+	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/sse"
 	"github.com/Ksalgotra1/Marshal/internal/store"
@@ -126,7 +127,7 @@ func grouperProcess(pool *pgxpool.Pool, events grouper.EventPublisher) worker.Pr
 		engine.Run(ctx)
 		// Enqueue an assign_group job and wake assigner via NOTIFY
 		js := &store.JobStore{DB: pool}
-		js.Enqueue(ctx, "assign_group", struct{}{}, time.Now())
+		js.Enqueue(ctx, "assign_group", struct{}{}, models.PriorityNormal, time.Now())
 		worker.Notify(ctx, pool, "assigner_wakeup")
 		return nil
 	}

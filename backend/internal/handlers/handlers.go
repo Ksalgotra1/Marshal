@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/api"
+	"github.com/Ksalgotra1/Marshal/internal/dispatch"
+	"github.com/Ksalgotra1/Marshal/internal/geo"
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
@@ -72,7 +74,7 @@ func (h *Handlers) HandleCreateRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Enqueue a grouper job and wake the worker via Postgres NOTIFY
 	js := &store.JobStore{DB: h.Pool}
-	js.Enqueue(r.Context(), "group_pending", struct{}{}, time.Now())
+	js.Enqueue(r.Context(), "group_pending", struct{}{}, models.PriorityNormal, time.Now())
 	worker.Notify(r.Context(), h.Pool, "grouper_wakeup")
 
 	api.WriteJSON(w, http.StatusCreated, api.JSON{
@@ -175,7 +177,7 @@ func (h *Handlers) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 
 	gs := &store.GroupStore{DB: tx}
-	
+
 	// Enforce capacity limit of 4
 	ids, err := gs.GetMemberRequestIDs(r.Context(), groupID)
 	if err != nil {
@@ -312,6 +314,30 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 	driverName := "unknown"
 	if driver, err := ds.GetByID(r.Context(), body.DriverID); err == nil {
 		driverName = driver.Name
+	}
+
+	detail, err := gs.GetByIDWithMembers(r.Context(), groupID)
+	if err == nil {
+		var stops []dispatch.Stop
+		for _, m := range detail.Members {
+			stops = append(stops, dispatch.Stop{
+				StudentID: m.ID,
+				Name:      m.RequesterName,
+				LatLng:    geo.LatLng{Lat: m.PickupLat, Lng: m.PickupLng},
+				Type:      dispatch.Pickup,
+			})
+			stops = append(stops, dispatch.Stop{
+				StudentID: m.ID,
+				Name:      m.RequesterName,
+				LatLng:    geo.LatLng{Lat: m.DropoffLat, Lng: m.DropoffLng},
+				Type:      dispatch.Dropoff,
+			})
+		}
+		if seq, err := dispatch.OptimalStopSequence(stops); err == nil {
+			mapsLink := dispatch.BuildMapsDeepLink(0, 0, seq)
+			msg := dispatch.FormatDispatchMessage(seq, mapsLink)
+			slog.Info("dispatch message generated", "msg", msg)
+		}
 	}
 
 	slog.Info("driver claimed group", "group_id", groupID, "driver_id", body.DriverID)

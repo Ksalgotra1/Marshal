@@ -19,9 +19,9 @@ import (
 
 type HandlersIntegrationSuite struct {
 	suite.Suite
-	db      *testdb.Instance
-	ctx     context.Context
-	handler http.Handler
+	db       *testdb.Instance
+	ctx      context.Context
+	handler  http.Handler
 	handlers *Handlers
 }
 
@@ -32,13 +32,13 @@ func TestHandlersIntegrationSuite(t *testing.T) {
 func (s *HandlersIntegrationSuite) SetupSuite() {
 	s.ctx = context.Background()
 	s.db = testdb.Start(s.T())
-	
+
 	s.handlers = &Handlers{Pool: s.db.Pool}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/requests", s.handlers.HandleCreateRequest)
 	mux.HandleFunc("POST /api/groups/{id}/claim", s.handlers.HandleClaimGroup)
 	mux.HandleFunc("POST /api/groups/{id}/join", s.handlers.HandleJoinGroup)
-	
+
 	s.handler = api.RequestIDMiddleware(api.CORSMiddleware(mux))
 }
 
@@ -64,7 +64,7 @@ func (s *HandlersIntegrationSuite) TestCreateRequest_TimeTravelRejection() {
 	s.handler.ServeHTTP(rec, req)
 
 	s.Equal(http.StatusBadRequest, rec.Code)
-	
+
 	var response map[string]string
 	json.Unmarshal(rec.Body.Bytes(), &response)
 	s.Contains(response["error"], "at least 10 minutes from now")
@@ -76,7 +76,7 @@ func (s *HandlersIntegrationSuite) TestClaimGroup_ConcurrentConflict() {
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
 		INSERT INTO drivers (name, telegram_id, status) VALUES ('TestDriver', 12345, 'online') RETURNING id
 	`).Scan(&driverID))
-	
+
 	// Create a second driver
 	var driver2ID string
 	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
@@ -90,7 +90,7 @@ func (s *HandlersIntegrationSuite) TestClaimGroup_ConcurrentConflict() {
 	`).Scan(&groupID))
 
 	done := make(chan int)
-	
+
 	claimFunc := func(dID string) {
 		payload := map[string]string{"driver_id": dID}
 		body, _ := json.Marshal(payload)

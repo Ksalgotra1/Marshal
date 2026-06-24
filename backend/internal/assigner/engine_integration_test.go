@@ -64,6 +64,20 @@ func (s *AssignerIntegrationSuite) TestRunCancelsMaxRetriesAndRedispatchesTimedO
 	s.Equal(2, attempts)
 }
 
+func (s *AssignerIntegrationSuite) TestAssignerPrioritizesFastTrackOverHigherScore() {
+	normalID := s.insertRawGroupPriority("grouped", 0, time.Now().Add(time.Hour), time.Now(), 90, models.PriorityNormal)
+	fastID := s.insertRawGroupPriority("grouped", 0, time.Now().Add(time.Hour), time.Now(), 20, models.PriorityHigh)
+
+	Run(s.ctx, s.db.Pool, s.events)
+
+	s.Len(s.events.events, 2)
+	s.Equal("group:dispatching", s.events.events[0].Type)
+	s.Equal(fastID, s.events.events[0].GroupID) // Fast gets dispatched FIRST
+
+	s.Equal("group:dispatching", s.events.events[1].Type)
+	s.Equal(normalID, s.events.events[1].GroupID)
+}
+
 func (s *AssignerIntegrationSuite) TestRunConcurrentLockContention() {
 	// Create exactly 5 groups
 	for i := 0; i < 5; i++ {
@@ -96,7 +110,6 @@ func (s *AssignerIntegrationSuite) TestRunConcurrentLockContention() {
 	s.Equal(5, dispatchingCount)
 }
 
-
 func (s *AssignerIntegrationSuite) createGroup(score float64) string {
 	rs := &store.RequestStore{DB: s.db.Pool}
 	var members []models.RideRequest
@@ -114,7 +127,7 @@ func (s *AssignerIntegrationSuite) createGroup(score float64) string {
 		s.Require().NoError(err)
 		members = append(members, *req)
 	}
-	id, err := (&store.GroupStore{DB: s.db.Pool}).Create(s.ctx, members, score)
+	id, err := (&store.GroupStore{DB: s.db.Pool}).Create(s.ctx, members, score, models.PriorityNormal)
 	s.Require().NoError(err)
 	return id
 }
@@ -126,6 +139,16 @@ func (s *AssignerIntegrationSuite) insertRawGroup(status string, attempts int, a
 		VALUES ($1, $2, $3, $4, $5)
 		RETURNING id
 	`, status, attempts, arriveBy, updatedAt, score).Scan(&id))
+	return id
+}
+
+func (s *AssignerIntegrationSuite) insertRawGroupPriority(status string, attempts int, arriveBy, updatedAt time.Time, score float64, priority string) string {
+	var id string
+	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
+		INSERT INTO ride_groups (status, dispatch_attempts, arrive_by, updated_at, route_score, priority)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id
+	`, status, attempts, arriveBy, updatedAt, score, priority).Scan(&id))
 	return id
 }
 
