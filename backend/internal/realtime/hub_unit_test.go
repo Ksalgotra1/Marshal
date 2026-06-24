@@ -159,10 +159,10 @@ func (s *HubUnitSuite) TestConcurrentConnectsAndDisconnects() {
 			}()
 
 			s.hub.RegisterStreamClient(client)
-			
+
 			// Simulate a brief connection
 			time.Sleep(5 * time.Millisecond)
-			
+
 			// Check if evicted prematurely
 			if client.isClosed() {
 				atomic.AddInt32(&evictedCount, 1)
@@ -175,7 +175,7 @@ func (s *HubUnitSuite) TestConcurrentConnectsAndDisconnects() {
 	}
 
 	wg.Wait()
-	
+
 	// Ensure connection count goes back to 0 cleanly without panics or races
 	s.Eventually(func() bool { return s.hub.ConnectionCount() == 0 }, time.Second, 10*time.Millisecond)
 
@@ -188,7 +188,7 @@ func (s *HubUnitSuite) TestGhostRoomBroadcast() {
 	s.NotPanics(func() {
 		s.hub.Broadcast("ghost-room", GroupFormed("ghost-room", 4, 99.9))
 	})
-	
+
 	// Broadcast multiple to ghost rooms
 	s.NotPanics(func() {
 		s.hub.BroadcastMulti([]string{"ghost-1", "ghost-2"}, GroupCancelled("ghost-1", "test"))
