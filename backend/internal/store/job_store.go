@@ -14,7 +14,7 @@ type JobStore struct{ DB DBTX }
 
 // Enqueue inserts a new job into the queue.
 // runAfter controls when the job becomes visible to workers (use time.Now() for immediate).
-func (s *JobStore) Enqueue(ctx context.Context, jobType string, payload any, runAfter time.Time) (string, error) {
+func (s *JobStore) Enqueue(ctx context.Context, jobType string, payload any, priority string, runAfter time.Time) (string, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("JobStore.Enqueue marshal: %w", err)
@@ -22,10 +22,10 @@ func (s *JobStore) Enqueue(ctx context.Context, jobType string, payload any, run
 
 	var id string
 	err = s.DB.QueryRow(ctx, `
-		INSERT INTO jobs (job_type, payload, run_after)
-		VALUES ($1, $2, $3)
+		INSERT INTO jobs (job_type, payload, priority, run_after)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id
-	`, jobType, data, runAfter).Scan(&id)
+	`, jobType, data, priority, runAfter).Scan(&id)
 	if err != nil {
 		return "", fmt.Errorf("JobStore.Enqueue: %w", err)
 	}
@@ -46,9 +46,9 @@ func (s *JobStore) Dequeue(ctx context.Context, jobType string) (*models.Job, er
 			LIMIT 1
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING id, job_type, payload, status, attempts, max_attempts, run_after, created_at, updated_at
+		RETURNING id, job_type, payload, status, priority, attempts, max_attempts, run_after, created_at, updated_at
 	`, jobType).Scan(
-		&j.ID, &j.JobType, &j.Payload, &j.Status, &j.Attempts,
+		&j.ID, &j.JobType, &j.Payload, &j.Status, &j.Priority, &j.Attempts,
 		&j.MaxAttempts, &j.RunAfter, &j.CreatedAt, &j.UpdatedAt,
 	)
 	if err != nil {

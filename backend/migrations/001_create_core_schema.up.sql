@@ -32,7 +32,8 @@ CREATE TABLE ride_requests (
 CREATE TABLE ride_groups (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     status              TEXT NOT NULL DEFAULT 'grouped',
-    route_score    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    priority            TEXT NOT NULL DEFAULT 'normal',
+    route_score         DOUBLE PRECISION NOT NULL DEFAULT 0,
     arrive_by           TIMESTAMPTZ NOT NULL,
     expected_departure  TIMESTAMPTZ,
     driver_id           UUID REFERENCES drivers(id),
@@ -56,6 +57,7 @@ CREATE TABLE jobs (
     job_type        TEXT NOT NULL,
     payload         JSONB NOT NULL DEFAULT '{}',
     status          TEXT NOT NULL DEFAULT 'queued',
+    priority        TEXT NOT NULL DEFAULT 'normal',
     attempts        INT NOT NULL DEFAULT 0,
     max_attempts    INT NOT NULL DEFAULT 3,
     run_after       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -84,7 +86,7 @@ CREATE INDEX idx_requests_status_h3 ON ride_requests(status, pickup_h3);
 
 -- Assigner: priority queue (THE max-heap)
 CREATE INDEX idx_groups_priority_queue
-    ON ride_groups(route_score DESC)
+    ON ride_groups((CASE WHEN priority = 'high' THEN 0 ELSE 1 END), route_score DESC)
     WHERE status = 'grouped' AND driver_id IS NULL;
 
 -- Driver assignment lookups

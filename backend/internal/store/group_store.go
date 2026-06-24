@@ -21,7 +21,7 @@ type GroupStore struct{ DB DBTX }
 
 // Create inserts a new ride group and links its member requests.
 // All operations run inside the caller's transaction.
-func (s *GroupStore) Create(ctx context.Context, members []models.RideRequest, score float64) (string, error) {
+func (s *GroupStore) Create(ctx context.Context, members []models.RideRequest, score float64, priority string) (string, error) {
 	// Earliest arrive_by among members is the group's deadline
 	arriveBy := members[0].ArriveBy
 	for _, m := range members[1:] {
@@ -32,10 +32,10 @@ func (s *GroupStore) Create(ctx context.Context, members []models.RideRequest, s
 
 	var groupID string
 	err := s.DB.QueryRow(ctx, `
-		INSERT INTO ride_groups (route_score, arrive_by)
-		VALUES ($1, $2)
+		INSERT INTO ride_groups (priority, route_score, arrive_by)
+		VALUES ($1, $2, $3)
 		RETURNING id
-	`, score, arriveBy).Scan(&groupID)
+	`, priority, score, arriveBy).Scan(&groupID)
 	if err != nil {
 		return "", fmt.Errorf("GroupStore.Create: %w", err)
 	}
@@ -61,11 +61,11 @@ func (s *GroupStore) Create(ctx context.Context, members []models.RideRequest, s
 // ListOpen returns groups still accepting members (status=grouped, no driver yet).
 func (s *GroupStore) ListOpen(ctx context.Context) ([]models.RideGroup, error) {
 	rows, err := s.DB.Query(ctx, `
-		SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
+		SELECT id, status, priority, route_score, arrive_by, expected_departure, driver_id,
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups
 		WHERE status = 'grouped' AND driver_id IS NULL AND arrive_by > NOW()
-		ORDER BY route_score DESC
+		ORDER BY (CASE WHEN priority = 'high' THEN 0 ELSE 1 END), route_score DESC
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("GroupStore.ListOpen: %w", err)
@@ -83,7 +83,7 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 		f.Offset = 0
 	}
 
-	query := `SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
+	query := `SELECT id, status, priority, route_score, arrive_by, expected_departure, driver_id,
 	                 dispatch_attempts, telegram_msg_id, created_at, updated_at
 	          FROM ride_groups`
 	args := []any{}
@@ -95,7 +95,7 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 		argIdx++
 	}
 
-	query += ` ORDER BY route_score DESC, created_at DESC LIMIT $` + strconv.Itoa(argIdx)
+	query += ` ORDER BY (CASE WHEN priority = 'high' THEN 0 ELSE 1 END), route_score DESC, created_at DESC LIMIT $` + strconv.Itoa(argIdx)
 	args = append(args, f.Limit)
 	argIdx++
 	query += ` OFFSET $` + strconv.Itoa(argIdx)
@@ -113,11 +113,11 @@ func (s *GroupStore) ListFiltered(ctx context.Context, f GroupFilter) ([]models.
 func (s *GroupStore) GetByID(ctx context.Context, id string) (*models.RideGroup, error) {
 	var g models.RideGroup
 	err := s.DB.QueryRow(ctx, `
-		SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
+		SELECT id, status, priority, route_score, arrive_by, expected_departure, driver_id,
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups WHERE id = $1
 	`, id).Scan(
-		&g.ID, &g.Status, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
+		&g.ID, &g.Status, &g.Priority, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
 		&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
 	)
 	if err != nil {
@@ -174,15 +174,15 @@ func (s *GroupStore) GetByIDWithMembers(ctx context.Context, id string) (*GroupD
 func (s *GroupStore) PopHighestScore(ctx context.Context) (*models.RideGroup, error) {
 	var g models.RideGroup
 	err := s.DB.QueryRow(ctx, `
-		SELECT id, status, route_score, arrive_by, expected_departure, driver_id,
+		SELECT id, status, priority, route_score, arrive_by, expected_departure, driver_id,
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups
 		WHERE status = 'grouped' AND driver_id IS NULL
-		ORDER BY route_score DESC
+		ORDER BY (CASE WHEN priority = 'high' THEN 0 ELSE 1 END), route_score DESC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
 	`).Scan(
-		&g.ID, &g.Status, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
+		&g.ID, &g.Status, &g.Priority, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
 		&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
 	)
 	if err != nil {
@@ -315,7 +315,7 @@ func scanGroups(rows interface {
 		var g models.RideGroup
 		var expectedDep *time.Time
 		if err := rows.Scan(
-			&g.ID, &g.Status, &g.RouteScore, &g.ArriveBy, &expectedDep,
+			&g.ID, &g.Status, &g.Priority, &g.RouteScore, &g.ArriveBy, &expectedDep,
 			&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
 		); err != nil {
 			return nil, err
