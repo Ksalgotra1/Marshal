@@ -31,10 +31,7 @@ export function GroupBrowser({ activeRequest, groups, isBusy, onJoin }) {
               <h3>{group.status}</h3>
               <span>Arrive by {formatTime(group.arrive_by)}</span>
             </div>
-            <div className="score-ring">
-              <strong>{Math.round(Number(group.confidence_score || 0) * 100)}%</strong>
-              <span>match</span>
-            </div>
+
             <button
               className="pill ghost"
               type="button"

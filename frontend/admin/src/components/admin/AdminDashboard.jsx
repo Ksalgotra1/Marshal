@@ -24,7 +24,7 @@ async function fetchGroupDetails(request, groupIds) {
 
 function avg(groups) {
   if (!groups.length) return 0
-  return groups.reduce((s, g) => s + Number(g.confidence_score || 0), 0) / groups.length
+  return groups.reduce((s, g) => s + Number(g.route_score || 0), 0) / groups.length
 }
 
 function useDebouncedCallback(callback, delay) {

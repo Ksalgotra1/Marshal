@@ -1,4 +1,4 @@
-export function ConfidenceBar({ score }) {
+export function RouteScoreBar({ score }) {
   const pct = Math.max(0, Math.min(100, (Number(score) / 40) * 100))
   const color = pct > 70 ? 'var(--green)' : pct > 40 ? 'rgba(17,255,153,0.55)' : 'rgba(17,255,153,0.25)'
   return (

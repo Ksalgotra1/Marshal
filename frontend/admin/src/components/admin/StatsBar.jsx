@@ -9,7 +9,7 @@ export function StatsBar({ stats }) {
   const metrics = [
     { label: 'Groups today',    value: stats.groups },
     { label: 'Drivers online',  value: stats.onlineDrivers },
-    { label: 'Avg confidence',  value: typeof stats.avgScore === 'number' ? stats.avgScore.toFixed(1) : '0.0' },
+    { label: 'Avg route score',  value: typeof stats.avgScore === 'number' ? stats.avgScore.toFixed(1) : '0.0' },
     { label: 'Live connections', value: stats.connections },
   ]
 

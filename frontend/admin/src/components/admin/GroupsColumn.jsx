@@ -13,7 +13,7 @@ const loadMoreStyle = {
 }
 
 export function GroupsColumn({ groups, groupMembers, groupDriverNames, hasMore, onLoadMore }) {
-  const sorted = [...groups].sort((a, b) => Number(b.confidence_score) - Number(a.confidence_score))
+  const sorted = [...groups].sort((a, b) => Number(b.route_score) - Number(a.route_score))
 
   return (
     <section style={{
@@ -36,7 +36,7 @@ export function GroupsColumn({ groups, groupMembers, groupDriverNames, hasMore, 
             Groups Board
           </h2>
           <p style={{ fontSize: '12px', color: 'var(--dark-gray)', fontWeight: 400 }}>
-            Ordered by confidence score
+            Ordered by route score
           </p>
         </div>
         {sorted.length > 0 && (

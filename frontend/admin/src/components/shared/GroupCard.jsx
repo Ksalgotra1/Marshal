@@ -1,4 +1,4 @@
-import { ConfidenceBar } from './ConfidenceBar'
+import { RouteScoreBar } from './RouteScoreBar'
 import { ScoreLabel } from './ScoreLabel'
 import { StatusBadge } from './StatusBadge'
 
@@ -35,12 +35,31 @@ export function GroupCard({ group, memberNames = [], driverName }) {
         }}>
           #{group.id.slice(0, 8)}
         </span>
-        <StatusBadge status={group.status} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          {group.priority === 'high' && (
+            <span style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              background: 'var(--orange-dim)',
+              color: 'var(--orange)',
+              fontSize: '11px',
+              fontWeight: 500,
+              padding: '3px 10px',
+              borderRadius: '9999px',
+              letterSpacing: '0.01em',
+              whiteSpace: 'nowrap',
+            }}>
+              <span style={{ width: '4px', height: '4px', borderRadius: '9999px', background: 'var(--orange)', flexShrink: 0, marginRight: '5px' }} />
+              Fast Track
+            </span>
+          )}
+          <StatusBadge status={group.status} />
+        </div>
       </div>
 
       {/* Score row */}
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: '10px' }}>
-        <ScoreLabel score={group.confidence_score} />
+        <ScoreLabel score={group.route_score} />
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: '11px', color: 'var(--dark-gray)', marginBottom: '2px' }}>Arrive by</div>
           <div style={{
@@ -54,7 +73,7 @@ export function GroupCard({ group, memberNames = [], driverName }) {
         </div>
       </div>
 
-      <ConfidenceBar score={group.confidence_score} />
+      <RouteScoreBar score={group.route_score} />
 
       {/* Footer */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '14px' }}>
