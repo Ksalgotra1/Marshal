@@ -104,7 +104,7 @@ func TestScenarioA_ExactGroup(t *testing.T) {
 	seq, err := dispatch.OptimalStopSequence(stops)
 	require.NoError(t, err)
 
-	mapsLink := dispatch.BuildMapsDeepLink(0, 0, seq)
+	mapsLink := dispatch.BuildMapsDeepLink(seq)
 	assert.Contains(t, mapsLink, "destination=30.500000%2C76.500000")
 	// 2 waypoints means 3 stops before destination, wait: we have 3 pickups, 3 dropoffs -> 6 stops.
 	// 4 waypoints for 6 stops! Wait, 6 stops: 1 origin, 1 dest, 4 waypoints!
@@ -198,7 +198,11 @@ func TestScenarioC_FastTrack(t *testing.T) {
 
 	// Verify priority changes dispatch order
 	pub := &recordingPublisher{}
-	assigner.Run(context.Background(), db, pub)
+	
+	_, err = db.Exec(context.Background(), `INSERT INTO drivers (name, telegram_id, status) VALUES ('Test Driver', 12345, 'online')`)
+	require.NoError(t, err)
+
+	assigner.Run(context.Background(), db, pub, nil)
 
 	require.Len(t, pub.events, 2)
 	assert.Equal(t, "group:dispatching", pub.events[0].Type)

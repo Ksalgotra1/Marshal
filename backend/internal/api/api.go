@@ -22,10 +22,6 @@ func WriteJSON(w http.ResponseWriter, status int, data any) {
 	}
 }
 
-// WriteError writes a standard error response.
-func WriteError(w http.ResponseWriter, status int, msg string) {
-	WriteJSON(w, status, JSON{"error": msg})
-}
 
 // RequestID returns the request correlation id attached by RequestIDMiddleware.
 func RequestID(r *http.Request) string {

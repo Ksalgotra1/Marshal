@@ -78,9 +78,8 @@ func TestMapsLinkStructure(t *testing.T) {
 		{LatLng: geo.LatLng{Lat: 30.2, Lng: 76.2}},
 		{LatLng: geo.LatLng{Lat: 30.3, Lng: 76.3}},
 	}
-	link := BuildMapsDeepLink(30.0, 76.0, seq)
+	link := BuildMapsDeepLink(seq)
 
-	assert.Contains(t, link, "origin=30.000000%2C76.000000")
 	assert.Contains(t, link, "destination=30.300000%2C76.300000")
 	assert.Contains(t, link, "waypoints=30.100000%2C76.100000%7C30.200000%2C76.200000")
 	assert.Contains(t, link, "travelmode=driving")

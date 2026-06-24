@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/Ksalgotra1/Marshal/internal/geo"
+	"github.com/Ksalgotra1/Marshal/internal/models"
 )
 
 type StopType int
@@ -118,4 +119,33 @@ func FormatDispatchMessage(seq []Stop, mapsLink string) string {
 	}
 	sb.WriteString(fmt.Sprintf("👉 Route: %s", mapsLink))
 	return sb.String()
+}
+
+// GenerateMessage computes the optimal sequence for a group of ride requests,
+// builds the maps deep link, and formats the dispatch text message.
+func GenerateMessage(members []models.RideRequest) ([]Stop, string, string, error) {
+	var stops []Stop
+	for _, m := range members {
+		stops = append(stops, Stop{
+			StudentID: m.ID,
+			Name:      m.RequesterName,
+			LatLng:    geo.LatLng{Lat: m.PickupLat, Lng: m.PickupLng},
+			Type:      Pickup,
+		})
+		stops = append(stops, Stop{
+			StudentID: m.ID,
+			Name:      m.RequesterName,
+			LatLng:    geo.LatLng{Lat: m.DropoffLat, Lng: m.DropoffLng},
+			Type:      Dropoff,
+		})
+	}
+
+	seq, err := OptimalStopSequence(stops)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	mapsLink := BuildMapsDeepLink(seq)
+	msg := FormatDispatchMessage(seq, mapsLink)
+	return seq, mapsLink, msg, nil
 }

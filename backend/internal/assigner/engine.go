@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/dispatch"
-	"github.com/Ksalgotra1/Marshal/internal/geo"
 	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
@@ -102,27 +101,8 @@ func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher, bot Dis
 		if err != nil {
 			slog.Error("assigner: failed to fetch group members", "error", err)
 		} else {
-			var stops []dispatch.Stop
-			for _, m := range detail.Members {
-				stops = append(stops, dispatch.Stop{
-					StudentID: m.ID,
-					Name:      m.RequesterName,
-					LatLng:    geo.LatLng{Lat: m.PickupLat, Lng: m.PickupLng},
-					Type:      dispatch.Pickup,
-				})
-				stops = append(stops, dispatch.Stop{
-					StudentID: m.ID,
-					Name:      m.RequesterName,
-					LatLng:    geo.LatLng{Lat: m.DropoffLat, Lng: m.DropoffLng},
-					Type:      dispatch.Dropoff,
-				})
-			}
-
-			seq, err := dispatch.OptimalStopSequence(stops)
+			_, _, msg, err := dispatch.GenerateMessage(detail.Members)
 			if err == nil {
-				mapsLink := dispatch.BuildMapsDeepLink(seq)
-				msg := dispatch.FormatDispatchMessage(seq, mapsLink)
-
 				if bot != nil {
 					msgID, err := bot.SendDispatch(ctx, group.ID, msg)
 					if err != nil {

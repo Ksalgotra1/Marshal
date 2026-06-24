@@ -149,11 +149,3 @@ func (s *RequestStore) FetchPendingLocked(ctx context.Context) ([]models.RideReq
 	return requests, nil
 }
 
-// MarkGrouped updates a request's status to 'grouped'.
-func (s *RequestStore) MarkGrouped(ctx context.Context, requestID string) error {
-	_, err := s.DB.Exec(ctx,
-		`UPDATE ride_requests SET status = 'grouped', updated_at = NOW() WHERE id = $1`,
-		requestID,
-	)
-	return err
-}

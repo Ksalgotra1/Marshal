@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/dispatch"
-	"github.com/Ksalgotra1/Marshal/internal/geo"
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/store"
 )
@@ -186,30 +185,11 @@ func (b *Bot) handleAccept(ctx context.Context, cq CallbackQuery) {
 		return
 	}
 
-	var stops []dispatch.Stop
-	for _, m := range detail.Members {
-		stops = append(stops, dispatch.Stop{
-			StudentID: m.ID,
-			Name:      m.RequesterName,
-			LatLng:    geo.LatLng{Lat: m.PickupLat, Lng: m.PickupLng},
-			Type:      dispatch.Pickup,
-		})
-		stops = append(stops, dispatch.Stop{
-			StudentID: m.ID,
-			Name:      m.RequesterName,
-			LatLng:    geo.LatLng{Lat: m.DropoffLat, Lng: m.DropoffLng},
-			Type:      dispatch.Dropoff,
-		})
-	}
-
-	seq, err := dispatch.OptimalStopSequence(stops)
+	_, _, msg, err := dispatch.GenerateMessage(detail.Members)
 	if err != nil {
 		slog.Error("telegram: failed to compute optimal sequence", "error", err)
 		return
 	}
-
-	mapsLink := dispatch.BuildMapsDeepLink(seq)
-	msg := dispatch.FormatDispatchMessage(seq, mapsLink)
 
 	finalText := fmt.Sprintf("✅ Accepted by %s\n\n%s", driver.Name, msg)
 	_ = b.EditMessage(ctx, cq.Message.MessageID, finalText)

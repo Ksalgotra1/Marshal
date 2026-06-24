@@ -11,7 +11,6 @@ import (
 
 	"github.com/Ksalgotra1/Marshal/internal/api"
 	"github.com/Ksalgotra1/Marshal/internal/dispatch"
-	"github.com/Ksalgotra1/Marshal/internal/geo"
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
@@ -319,24 +318,9 @@ func (h *Handlers) HandleClaimGroup(w http.ResponseWriter, r *http.Request) {
 	var mapsLink, msg string
 	detail, err := gs.GetByIDWithMembers(r.Context(), groupID)
 	if err == nil {
-		var stops []dispatch.Stop
-		for _, m := range detail.Members {
-			stops = append(stops, dispatch.Stop{
-				StudentID: m.ID,
-				Name:      m.RequesterName,
-				LatLng:    geo.LatLng{Lat: m.PickupLat, Lng: m.PickupLng},
-				Type:      dispatch.Pickup,
-			})
-			stops = append(stops, dispatch.Stop{
-				StudentID: m.ID,
-				Name:      m.RequesterName,
-				LatLng:    geo.LatLng{Lat: m.DropoffLat, Lng: m.DropoffLng},
-				Type:      dispatch.Dropoff,
-			})
-		}
-		if seq, err := dispatch.OptimalStopSequence(stops); err == nil {
-			mapsLink = dispatch.BuildMapsDeepLink(seq)
-			msg = dispatch.FormatDispatchMessage(seq, mapsLink)
+		if _, link, m, err := dispatch.GenerateMessage(detail.Members); err == nil {
+			mapsLink = link
+			msg = m
 		}
 	}
 
