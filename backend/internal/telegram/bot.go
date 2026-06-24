@@ -40,7 +40,7 @@ func New(token string, chatID int64, gs GroupStorer, ds DriverStorer) *Bot {
 	return &Bot{
 		token:   token,
 		chatID:  chatID,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  &http.Client{Timeout: 60 * time.Second},
 		baseURL: "https://api.telegram.org",
 		gs:      gs,
 		ds:      ds,
