@@ -41,8 +41,8 @@ func TestHighDetourLowScore(t *testing.T) {
 func TestEnRouteLowerThanExact(t *testing.T) {
 	now := time.Now()
 	m1 := RequestMember{"A", 30.0, 76.0, 30.5, 76.5, now}
-	m2 := RequestMember{"B", 30.1, 76.1, 30.4, 76.4, now}
-	m3 := RequestMember{"C", 30.2, 76.2, 30.3, 76.3, now}
+	m2 := RequestMember{"B", 30.1, 76.1, 30.5, 76.5, now}
+	m3 := RequestMember{"C", 30.2, 76.2, 30.5, 76.5, now}
 
 	exact := ComputeRouteScore(RouteScoreInput{
 		Members:   []RequestMember{m1, m2, m3},

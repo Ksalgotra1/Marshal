@@ -74,7 +74,7 @@ func (s *GrouperIntegrationSuite) TestRunFormsCompatibleGroupAndBroadcasts() {
 
 func (s *GrouperIntegrationSuite) TestRunDoesNotGroupWhenUnderTargetSize() {
 	rs := &store.RequestStore{DB: s.db.Pool}
-	for _, name := range []string{"Aman", "Bani"} {
+	for _, name := range []string{"Aman"} {
 		_, err := rs.Create(s.ctx, &models.CreateRequestPayload{
 			RequesterName: name,
 			PickupLat:     30.3545,
@@ -96,7 +96,7 @@ func (s *GrouperIntegrationSuite) TestRunDoesNotGroupWhenUnderTargetSize() {
 
 func (s *GrouperIntegrationSuite) TestRunConcurrentLockContention() {
 	rs := &store.RequestStore{DB: s.db.Pool}
-	
+
 	// Create 6 requests (exactly enough for 2 groups of 3)
 	for i := 0; i < 6; i++ {
 		_, err := rs.Create(s.ctx, &models.CreateRequestPayload{
@@ -112,12 +112,12 @@ func (s *GrouperIntegrationSuite) TestRunConcurrentLockContention() {
 
 	// Run two engines concurrently to simulate race conditions on pending requests
 	done := make(chan struct{})
-	
+
 	go func() {
 		(&Engine{Pool: s.db.Pool, Events: s.events}).Run(s.ctx)
 		done <- struct{}{}
 	}()
-	
+
 	go func() {
 		(&Engine{Pool: s.db.Pool, Events: s.events}).Run(s.ctx)
 		done <- struct{}{}
@@ -134,14 +134,14 @@ func (s *GrouperIntegrationSuite) TestRunConcurrentLockContention() {
 
 func (s *GrouperIntegrationSuite) TestRunIgnoresStaleRequests() {
 	rs := &store.RequestStore{DB: s.db.Pool}
-	
-	// Create 3 requests, but one is already past its arrive_by time
-	for i := 0; i < 3; i++ {
+
+	// Create 2 requests, but one is already past its arrive_by time
+	for i := 0; i < 2; i++ {
 		arriveBy := time.Now().Add(45 * time.Minute)
 		if i == 0 {
 			arriveBy = time.Now().Add(-10 * time.Minute) // Stale
 		}
-		
+
 		_, err := rs.Create(s.ctx, &models.CreateRequestPayload{
 			RequesterName: "Rider",
 			PickupLat:     30.3545,

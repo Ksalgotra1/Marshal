@@ -3,14 +3,10 @@ package grouper
 import (
 	"math"
 
+	"github.com/Ksalgotra1/Marshal/internal/geo"
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/uber/h3-go/v4"
 )
-
-type LatLng struct {
-	Lat float64
-	Lng float64
-}
 
 type GroupType int
 
@@ -26,44 +22,6 @@ type MatchResult struct {
 
 type Request = models.RideRequest
 
-func haversineKm(lat1, lng1, lat2, lng2 float64) float64 {
-	const R = 6371.0
-	dLat := (lat2 - lat1) * math.Pi / 180.0
-	dLng := (lng2 - lng1) * math.Pi / 180.0
-	lat1Rad := lat1 * math.Pi / 180.0
-	lat2Rad := lat2 * math.Pi / 180.0
-
-	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
-		math.Sin(dLng/2)*math.Sin(dLng/2)*math.Cos(lat1Rad)*math.Cos(lat2Rad)
-	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
-
-	return R * c
-}
-
-func bearingDeg(from, to LatLng) float64 {
-	lat1 := from.Lat * math.Pi / 180.0
-	lat2 := to.Lat * math.Pi / 180.0
-	dLng := (to.Lng - from.Lng) * math.Pi / 180.0
-
-	y := math.Sin(dLng) * math.Cos(lat2)
-	x := math.Cos(lat1)*math.Sin(lat2) - math.Sin(lat1)*math.Cos(lat2)*math.Cos(dLng)
-
-	b := math.Atan2(y, x) * 180.0 / math.Pi
-	if b < 0 {
-		b += 360.0
-	}
-	return b
-}
-
-func crossTrackDistanceKm(point, lineStart, lineEnd LatLng) float64 {
-	d13 := haversineKm(lineStart.Lat, lineStart.Lng, point.Lat, point.Lng)
-	theta13 := bearingDeg(lineStart, point) * math.Pi / 180.0
-	theta12 := bearingDeg(lineStart, lineEnd) * math.Pi / 180.0
-
-	const R = 6371.0
-	return math.Asin(math.Sin(d13/R)*math.Sin(theta13-theta12)) * R
-}
-
 func CheckCorridor(a, b Request) MatchResult {
 	// fail fast if H3 cells are missing
 	if a.PickupH3 == nil || b.PickupH3 == nil {
@@ -78,28 +36,28 @@ func CheckCorridor(a, b Request) MatchResult {
 		}
 	}
 
-	pA := LatLng{a.PickupLat, a.PickupLng}
-	dA := LatLng{a.DropoffLat, a.DropoffLng}
-	pB := LatLng{b.PickupLat, b.PickupLng}
-	dB := LatLng{b.DropoffLat, b.DropoffLng}
+	pA := geo.LatLng{Lat: a.PickupLat, Lng: a.PickupLng}
+	dA := geo.LatLng{Lat: a.DropoffLat, Lng: a.DropoffLng}
+	pB := geo.LatLng{Lat: b.PickupLat, Lng: b.PickupLng}
+	dB := geo.LatLng{Lat: b.DropoffLat, Lng: b.DropoffLng}
 
-	bA := bearingDeg(pA, dA)
-	bB := bearingDeg(pB, dB)
+	bA := geo.BearingDeg(pA, dA)
+	bB := geo.BearingDeg(pB, dB)
 
 	// handle 0/360 bearing wrap
 	diff := math.Abs(bA - bB)
 	if diff > 180 {
 		diff = 360 - diff
 	}
-	if diff >= 25 {
+	if diff >= 15 {
 		return MatchResult{Compatible: false}
 	}
 
-	routeLenA := haversineKm(pA.Lat, pA.Lng, dA.Lat, dA.Lng)
-	routeLenB := haversineKm(pB.Lat, pB.Lng, dB.Lat, dB.Lng)
+	routeLenA := geo.HaversineKm(pA.Lat, pA.Lng, dA.Lat, dA.Lng)
+	routeLenB := geo.HaversineKm(pB.Lat, pB.Lng, dB.Lat, dB.Lng)
 
-	dropBToA := math.Abs(crossTrackDistanceKm(dB, pA, dA))
-	dropAToB := math.Abs(crossTrackDistanceKm(dA, pB, dB))
+	dropBToA := math.Abs(geo.CrossTrackDistanceKm(dB, pA, dA))
+	dropAToB := math.Abs(geo.CrossTrackDistanceKm(dA, pB, dB))
 
 	// dropoff must lie within α=0.15 * routeLen of the other's route
 	if dropBToA > 0.15*routeLenA && dropAToB > 0.15*routeLenB {

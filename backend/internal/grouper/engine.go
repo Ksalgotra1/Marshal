@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Ksalgotra1/Marshal/internal/math"
 	"github.com/Ksalgotra1/Marshal/internal/models"
 	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
@@ -16,8 +15,6 @@ import (
 type EventPublisher interface {
 	BroadcastMulti([]string, realtime.Event)
 }
-
-const targetGroupSize = 3
 
 // Engine holds the grouper's dependencies.
 type Engine struct {
@@ -47,15 +44,59 @@ func (e *Engine) Run(ctx context.Context) {
 		slog.Error("grouper: failed to fetch pending", "error", err)
 		return
 	}
-	if len(pending) < targetGroupSize {
+	fastTrack, normal := splitByUrgency(pending)
+	var formedEvents []realtime.Event
+
+	if len(fastTrack) >= 2 {
+		// skip rerank hook
+		groups := e.processPool(ctx, fastTrack, 2, 4)
+		formedEvents = append(formedEvents, e.persistGroups(ctx, grpStore, groups, models.PriorityHigh)...)
+	}
+	if len(normal) >= 2 {
+		groups := e.processPool(ctx, normal, 2, 4)
+		groups = batchReRank(groups)
+		formedEvents = append(formedEvents, e.persistGroups(ctx, grpStore, groups, models.PriorityNormal)...)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		slog.Error("grouper: failed to commit", "error", err)
 		return
 	}
 
-	// Bucket requests by H3 pickup cell
+	if e.Events != nil {
+		for _, event := range formedEvents {
+			e.Events.BroadcastMulti([]string{"global", event.GroupID}, event)
+		}
+	}
+
+	slog.Info("grouper: cycle complete", "total_pending", len(pending), "events", len(formedEvents))
+}
+
+func (e *Engine) persistGroups(ctx context.Context, gs *store.GroupStore, groups []FormedGroup, priority string) []realtime.Event {
+	var events []realtime.Event
+	for _, fg := range groups {
+		var reqs []models.RideRequest
+		for _, m := range fg.Members {
+			reqs = append(reqs, models.RideRequest{
+				ID:       m.StudentID,
+				ArriveBy: m.ArriveBy,
+			})
+		}
+		groupID, err := gs.Create(ctx, reqs, fg.Score, priority)
+		if err != nil {
+			slog.Error("grouper: failed to create group", "error", err)
+			continue
+		}
+		slog.Info("grouper: group formed", "group_id", groupID, "members", len(fg.Members), "score", fg.Score, "priority", priority)
+		events = append(events, realtime.GroupFormed(groupID, len(fg.Members), fg.Score))
+	}
+	return events
+}
+
+func (e *Engine) processPool(ctx context.Context, pending []models.RideRequest, minSize, maxSize int) []FormedGroup {
 	buckets := make(map[int64][]models.RideRequest)
 	now := time.Now()
 	for _, r := range pending {
-		// Ignore stale requests that are already past their arrive_by time
 		if now.After(r.ArriveBy) {
 			continue
 		}
@@ -65,14 +106,12 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 
 	assigned := make(map[string]bool)
-	var formedEvents []realtime.Event
+	var groups []FormedGroup
 
-	// PASS 1 — Exact H3 cell match
 	for _, bucket := range buckets {
-		formedEvents = append(formedEvents, e.matchAndCreate(ctx, grpStore, bucket, assigned, "exact")...)
+		groups = append(groups, greedyFormation(bucket, assigned, minSize, maxSize)...)
 	}
 
-	// PASS 2 — k-ring=1 expansion (~870m)
 	for cell, bucket := range buckets {
 		neighbors, err := h3.GridDisk(h3.Cell(cell), 1)
 		if err != nil {
@@ -87,10 +126,9 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 		}
 		_ = bucket
-		formedEvents = append(formedEvents, e.matchAndCreate(ctx, grpStore, pool, assigned, "k1")...)
+		groups = append(groups, greedyFormation(pool, assigned, minSize, maxSize)...)
 	}
 
-	// PASS 3 — k-ring=2 expansion (~1.7km)
 	for cell, bucket := range buckets {
 		neighbors, err := h3.GridDisk(h3.Cell(cell), 2)
 		if err != nil {
@@ -105,73 +143,107 @@ func (e *Engine) Run(ctx context.Context) {
 			}
 		}
 		_ = bucket
-		formedEvents = append(formedEvents, e.matchAndCreate(ctx, grpStore, pool, assigned, "k2")...)
+		groups = append(groups, greedyFormation(pool, assigned, minSize, maxSize)...)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		slog.Error("grouper: failed to commit", "error", err)
-		return
-	}
-
-	if e.Events != nil {
-		for _, event := range formedEvents {
-			e.Events.BroadcastMulti([]string{"global", event.GroupID}, event)
-		}
-	}
-
-	slog.Info("grouper: cycle complete", "total_pending", len(pending), "members_grouped", len(assigned))
+	return groups
 }
 
-// matchAndCreate finds the best compatible group from the pool and persists it.
-func (e *Engine) matchAndCreate(ctx context.Context, gs *store.GroupStore, pool []models.RideRequest, assigned map[string]bool, pass string) []realtime.Event {
-	var events []realtime.Event
+// greedyFormation finds the best compatible groups from the pool without persisting.
+func greedyFormation(pool []models.RideRequest, assigned map[string]bool, minSize, maxSize int) []FormedGroup {
+	var formed []FormedGroup
 	for {
-		group := bestGroup(pool, assigned)
-		if len(group) < targetGroupSize {
+		group := bestGroup(pool, assigned, minSize, maxSize)
+		if len(group) < minSize {
 			break
 		}
 		score := computeRouteScoreForGroup(group)
-		groupID, err := gs.Create(ctx, group, score)
-		if err != nil {
-			slog.Error("grouper: failed to create group", "pass", pass, "error", err)
+		if score <= 0 {
 			break
 		}
+		res := CheckCorridor(group[0], group[len(group)-1])
+
+		var members []RequestMember
 		for _, r := range group {
+			members = append(members, RequestMember{
+				StudentID:  r.ID,
+				PickupLat:  r.PickupLat,
+				PickupLng:  r.PickupLng,
+				DropoffLat: r.DropoffLat,
+				DropoffLng: r.DropoffLng,
+				ArriveBy:   r.ArriveBy,
+			})
 			assigned[r.ID] = true
 		}
-		slog.Info("grouper: group formed", "group_id", groupID, "members", len(group), "score", score, "pass", pass)
 
-		events = append(events, realtime.GroupFormed(groupID, len(group), score))
+		formed = append(formed, FormedGroup{
+			Members:   members,
+			GroupType: res.Type,
+			Score:     score,
+		})
 	}
-	return events
+	return formed
 }
 
-// bestGroup picks the best compatible 3-request group from the current pool.
-func bestGroup(pool []models.RideRequest, assigned map[string]bool) []models.RideRequest {
+// bestGroup picks the best compatible group of size between minSize and maxSize from the current pool.
+func bestGroup(pool []models.RideRequest, assigned map[string]bool, minSize, maxSize int) []models.RideRequest {
 	var best []models.RideRequest
 	var bestScore float64 = -9999
 
-	for i, r1 := range pool {
-		if assigned[r1.ID] {
+	for i := 0; i < len(pool); i++ {
+		if assigned[pool[i].ID] {
 			continue
 		}
 		for j := i + 1; j < len(pool); j++ {
-			r2 := pool[j]
-			if assigned[r2.ID] {
+			if assigned[pool[j].ID] {
+				continue
+			}
+			candidate2 := []models.RideRequest{pool[i], pool[j]}
+			if !groupCompatible(candidate2) {
+				continue
+			}
+			if minSize <= 2 && 2 <= maxSize {
+				if s := computeRouteScoreForGroup(candidate2); s > bestScore {
+					bestScore = s
+					best = candidate2
+				}
+			}
+
+			if maxSize < 3 {
 				continue
 			}
 			for k := j + 1; k < len(pool); k++ {
-				r3 := pool[k]
-				if assigned[r3.ID] {
+				if assigned[pool[k].ID] {
 					continue
 				}
-				candidate := []models.RideRequest{r1, r2, r3}
-				if !groupCompatible(candidate) {
+				candidate3 := []models.RideRequest{pool[i], pool[j], pool[k]}
+				if !groupCompatible(candidate3) {
 					continue
 				}
-				if s := computeRouteScoreForGroup(candidate); s > bestScore {
-					bestScore = s
-					best = candidate
+				if minSize <= 3 && 3 <= maxSize {
+					if s := computeRouteScoreForGroup(candidate3); s > bestScore {
+						bestScore = s
+						best = candidate3
+					}
+				}
+
+				if maxSize < 4 {
+					continue
+				}
+				for l := k + 1; l < len(pool); l++ {
+					if assigned[pool[l].ID] {
+						continue
+					}
+					candidate4 := []models.RideRequest{pool[i], pool[j], pool[k], pool[l]}
+					if !groupCompatible(candidate4) {
+						continue
+					}
+					if minSize <= 4 && 4 <= maxSize {
+						if s := computeRouteScoreForGroup(candidate4); s > bestScore {
+							bestScore = s
+							best = candidate4
+						}
+					}
 				}
 			}
 		}
@@ -206,24 +278,16 @@ func computeRouteScoreForGroup(group []models.RideRequest) float64 {
 func groupCompatible(group []models.RideRequest) bool {
 	for i := 0; i < len(group); i++ {
 		for j := i + 1; j < len(group); j++ {
-			if !dropoffCompatible(group[i], group[j]) || !timeCompatible(group[i], group[j]) {
+			if !timeCompatible(group[i], group[j]) {
+				return false
+			}
+			res := CheckCorridor(group[i], group[j])
+			if !res.Compatible {
 				return false
 			}
 		}
 	}
 	return true
-}
-
-// dropoffCompatible returns true if two requests share a roughly similar dropoff.
-// Uses H3 grid distance if available, falls back to Haversine.
-func dropoffCompatible(r1, r2 models.RideRequest) bool {
-	if r1.DropoffH3 != nil && r2.DropoffH3 != nil {
-		dist, err := h3.GridDistance(h3.Cell(*r1.DropoffH3), h3.Cell(*r2.DropoffH3))
-		if err == nil && dist <= 5 { // ~870m at resolution 9
-			return true
-		}
-	}
-	return math.Distance(r1.DropoffLat, r1.DropoffLng, r2.DropoffLat, r2.DropoffLng) <= 1.5
 }
 
 // timeCompatible returns true if two requests have arrive_by within a 2-hour window.

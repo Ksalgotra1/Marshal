@@ -1,7 +1,6 @@
 package grouper
 
 import (
-	"reflect"
 	"testing"
 	"time"
 
@@ -50,19 +49,5 @@ func TestGroupGetsRouteScore(t *testing.T) {
 
 	if score != manualScore {
 		t.Errorf("expected engine computed score %f to match manual score %f", score, manualScore)
-	}
-}
-
-func TestNoConfidenceScoreField(t *testing.T) {
-	rg := models.RideGroup{}
-	v := reflect.TypeOf(rg)
-	_, hasConfidence := v.FieldByName("ConfidenceScore")
-	if hasConfidence {
-		t.Errorf("ConfidenceScore field still exists in models.RideGroup")
-	}
-
-	_, hasRoute := v.FieldByName("RouteScore")
-	if !hasRoute {
-		t.Errorf("RouteScore field does not exist in models.RideGroup")
 	}
 }

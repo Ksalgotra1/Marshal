@@ -30,7 +30,7 @@ func (s *GrouperUnitSuite) TestBestGroupPicksCompatibleTripleAndIgnoresAssigned(
 		s.request("far", 30.3548, 76.3661, 31.6339, 74.8723, s.now.Add(55*time.Minute)),
 	}
 
-	group := bestGroup(pool, map[string]bool{"skip": true})
+	group := bestGroup(pool, map[string]bool{"skip": true}, 3, 3)
 
 	s.Require().Len(group, 3)
 	s.ElementsMatch([]string{"a", "b", "c"}, []string{group[0].ID, group[1].ID, group[2].ID})
@@ -47,7 +47,6 @@ func (s *GrouperUnitSuite) TestCompatibilityRejectsDistantDropoffOrWideTimeWindo
 	s.False(groupCompatible([]models.RideRequest{a, late}))
 }
 
-
 func (s *GrouperUnitSuite) request(id string, pickupLat, pickupLng, dropoffLat, dropoffLng float64, arriveBy time.Time) models.RideRequest {
 	return models.RideRequest{
 		ID:         id,
@@ -55,7 +54,7 @@ func (s *GrouperUnitSuite) request(id string, pickupLat, pickupLng, dropoffLat, 
 		PickupLng:  pickupLng,
 		DropoffLat: dropoffLat,
 		DropoffLng: dropoffLng,
-		ArriveBy:   arriveBy,
-		CreatedAt:  s.now.Add(-10 * time.Minute),
+		PickupH3:   new(int64), DropoffH3: new(int64), ArriveBy: arriveBy,
+		CreatedAt: s.now.Add(-10 * time.Minute),
 	}
 }
