@@ -46,7 +46,8 @@ func main() {
 	if cfg.TelegramBotToken != "" {
 		gs := &store.GroupStore{DB: pool}
 		ds := &store.DriverStore{DB: pool}
-		bot = telegram.New(cfg.TelegramBotToken, mustParseInt64(cfg.TelegramDriverGroup), gs, ds)
+		cs := &store.ChatStore{DB: pool}
+		bot = telegram.New(cfg.TelegramBotToken, mustParseInt64(cfg.TelegramDriverGroup), gs, ds, cs, realtimeHub)
 	}
 
 	mux := http.NewServeMux()
@@ -86,6 +87,9 @@ func main() {
 	})
 
 	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx, Events: realtimeHub, WebSocket: realtimeHub}
+	if bot != nil {
+		h.MessageSender = bot
+	}
 
 	// Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -110,6 +114,8 @@ func main() {
 	mux.HandleFunc("GET /api/groups/{id}", h.HandleGetGroup)
 	mux.HandleFunc("POST /api/groups/{id}/join", h.HandleJoinGroup)
 	mux.HandleFunc("POST /api/groups/{id}/claim", h.HandleClaimGroup)
+	mux.HandleFunc("GET /api/groups/{id}/messages", h.HandleListMessages)
+	mux.HandleFunc("POST /api/groups/{id}/messages", h.HandleCreateMessage)
 
 	// Drivers
 	mux.HandleFunc("POST /api/drivers", h.HandleRegisterDriver)

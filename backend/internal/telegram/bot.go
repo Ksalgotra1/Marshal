@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,18 +14,29 @@ import (
 
 	"github.com/Ksalgotra1/Marshal/internal/dispatch"
 	"github.com/Ksalgotra1/Marshal/internal/models"
+	"github.com/Ksalgotra1/Marshal/internal/realtime"
 	"github.com/Ksalgotra1/Marshal/internal/store"
+	"github.com/jackc/pgx/v5"
 )
 
 type GroupStorer interface {
 	ClaimGroup(ctx context.Context, groupID, driverID string) (int64, error)
 	GetByIDWithMembers(ctx context.Context, id string) (*store.GroupDetail, error)
+	GetActiveForDriver(ctx context.Context, driverID string) (*models.RideGroup, error)
 }
 
 type DriverStorer interface {
 	GetByTelegramID(ctx context.Context, telegramID int64) (*models.Driver, error)
 	SetTelegramChat(ctx context.Context, telegramID int64, chatID int64) error
 	SetStatus(ctx context.Context, id, status string) error
+}
+
+type ChatStorer interface {
+	AddMessage(ctx context.Context, groupID, senderType, content string) (*models.ChatMessage, error)
+}
+
+type EventPublisher interface {
+	BroadcastMulti([]string, realtime.Event)
 }
 
 type Bot struct {
@@ -34,9 +46,11 @@ type Bot struct {
 	baseURL string
 	gs      GroupStorer
 	ds      DriverStorer
+	cs      ChatStorer
+	events  EventPublisher
 }
 
-func New(token string, chatID int64, gs GroupStorer, ds DriverStorer) *Bot {
+func New(token string, chatID int64, gs GroupStorer, ds DriverStorer, cs ChatStorer, events EventPublisher) *Bot {
 	return &Bot{
 		token:   token,
 		chatID:  chatID,
@@ -44,11 +58,13 @@ func New(token string, chatID int64, gs GroupStorer, ds DriverStorer) *Bot {
 		baseURL: "https://api.telegram.org",
 		gs:      gs,
 		ds:      ds,
+		cs:      cs,
+		events:  events,
 	}
 }
 
-func NewWithBaseURL(token string, chatID int64, gs GroupStorer, ds DriverStorer, baseURL string) *Bot {
-	bot := New(token, chatID, gs, ds)
+func NewWithBaseURL(token string, chatID int64, gs GroupStorer, ds DriverStorer, cs ChatStorer, events EventPublisher, baseURL string) *Bot {
+	bot := New(token, chatID, gs, ds, cs, events)
 	bot.baseURL = baseURL
 	return bot
 }
@@ -113,6 +129,12 @@ func (b *Bot) SendDispatch(ctx context.Context, groupID, msg string) (int, error
 	return res.Result.MessageID, nil
 }
 
+func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) error {
+	req := sendMessageRequest{ChatID: chatID, Text: text}
+	_, err := b.apiPost(ctx, "sendMessage", req)
+	return err
+}
+
 func (b *Bot) EditMessage(ctx context.Context, msgID int, text string) error {
 	req := editMessageTextRequest{
 		ChatID:    b.chatID,
@@ -133,6 +155,14 @@ func (b *Bot) AnswerCallback(ctx context.Context, callbackID, text string) error
 }
 
 func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
+	if update.Message != nil &&
+		update.Message.Chat.Type == "private" &&
+		!strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/") &&
+		strings.TrimSpace(update.Message.Text) != "" {
+		b.handleDriverMessage(ctx, *update.Message)
+		return
+	}
+
 	if update.Message != nil && strings.HasPrefix(update.Message.Text, "/start") {
 		if err := b.ds.SetTelegramChat(ctx, update.Message.From.ID, update.Message.Chat.ID); err != nil {
 			slog.Error("telegram: failed to set chat", "error", err)
@@ -193,4 +223,43 @@ func (b *Bot) handleAccept(ctx context.Context, cq CallbackQuery) {
 
 	finalText := fmt.Sprintf("✅ Accepted by %s\n\n%s", driver.Name, msg)
 	_ = b.EditMessage(ctx, cq.Message.MessageID, finalText)
+}
+
+func (b *Bot) handleDriverMessage(ctx context.Context, msg Message) {
+	driver, err := b.ds.GetByTelegramID(ctx, msg.From.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return // unregistered Telegram user DMing the bot — expected, no-op
+		}
+		slog.Error("handleDriverMessage: driver lookup failed", "error", err)
+		return
+	}
+	if driver == nil {
+		return
+	}
+
+	group, err := b.gs.GetActiveForDriver(ctx, driver.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			_ = b.SendMessage(ctx, msg.Chat.ID, "You don't have an active ride.")
+			return
+		}
+		slog.Error("handleDriverMessage: active group lookup failed", "error", err)
+		_ = b.SendMessage(ctx, msg.Chat.ID, "You don't have an active ride.")
+		return
+	}
+	if group == nil {
+		_ = b.SendMessage(ctx, msg.Chat.ID, "You don't have an active ride.")
+		return
+	}
+
+	chatMsg, err := b.cs.AddMessage(ctx, group.ID, "driver", msg.Text)
+	if err != nil {
+		slog.Error("telegram: failed to add driver message to chat", "error", err)
+		return
+	}
+
+	if b.events != nil {
+		b.events.BroadcastMulti([]string{group.ID}, realtime.ChatMessageEvent(*chatMsg))
+	}
 }

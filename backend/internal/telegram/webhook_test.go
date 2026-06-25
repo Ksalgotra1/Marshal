@@ -12,7 +12,7 @@ import (
 )
 
 func TestWebhookRejectsMissingSecret(t *testing.T) {
-	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{})
+	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{}, &fakeChatStore{}, &fakeEventPublisher{})
 	handler := NewWebhookHandler(bot, "secret")
 
 	req := httptest.NewRequest("POST", "/telegram/webhook", nil)
@@ -23,7 +23,7 @@ func TestWebhookRejectsMissingSecret(t *testing.T) {
 }
 
 func TestWebhookRejectsWrongSecret(t *testing.T) {
-	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{})
+	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{}, &fakeChatStore{}, &fakeEventPublisher{})
 	handler := NewWebhookHandler(bot, "secret")
 
 	req := httptest.NewRequest("POST", "/telegram/webhook", nil)
@@ -44,7 +44,7 @@ func TestWebhookAcceptsCorrectSecret(t *testing.T) {
 	}))
 	defer server.Close()
 
-	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{})
+	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{}, &fakeChatStore{}, &fakeEventPublisher{})
 	bot.baseURL = server.URL
 
 	handler := NewWebhookHandler(bot, "secret")
@@ -68,7 +68,7 @@ func TestWebhookAcceptsCorrectSecret(t *testing.T) {
 }
 
 func TestWebhookRejectsBadJSON(t *testing.T) {
-	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{})
+	bot := New("token", 123, &fakeGroupStore{}, &fakeDriverStore{}, &fakeChatStore{}, &fakeEventPublisher{})
 	handler := NewWebhookHandler(bot, "secret")
 
 	req := httptest.NewRequest("POST", "/telegram/webhook", bytes.NewReader([]byte("{bad json")))

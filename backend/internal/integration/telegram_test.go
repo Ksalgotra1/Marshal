@@ -100,7 +100,9 @@ func TestTelegramDispatchFlow(t *testing.T) {
 	// create bot pointing at mock server instead of real Telegram
 	gs := &store.GroupStore{DB: db}
 	ds := &store.DriverStore{DB: db}
-	bot := telegram.NewWithBaseURL("test-token", -1001234, gs, ds, mockTG.URL)
+	cs := &store.ChatStore{DB: db}
+	pub := &recordingPublisher{}
+	bot := telegram.NewWithBaseURL("test-token", -1001234, gs, ds, cs, pub, mockTG.URL)
 
 	// register a driver with known telegram_id
 	driverTelegramID := int64(6031420785)
@@ -119,7 +121,6 @@ func TestTelegramDispatchFlow(t *testing.T) {
 	runGrouperOnce(db)
 
 	// run assigner with real bot (points at mock Telegram)
-	pub := &recordingPublisher{}
 	assigner.Run(context.Background(), db, pub, bot)
 
 	// assert SendDispatch was called
