@@ -26,6 +26,9 @@ export function App() {
     refresh,
     resetRequest,
     setError,
+    messages,
+    isChatSending,
+    sendChatMessage,
   } = dashboard
 
   return (
@@ -97,7 +100,13 @@ export function App() {
         </aside>
 
         <div className={activePage === 'chat' ? 'mobile-page active chat-page' : 'mobile-page chat-page'}>
-          <DriverChatPanel activeRequest={activeRequest} groupDetail={groupDetail} />
+          <DriverChatPanel 
+            activeRequest={activeRequest} 
+            groupDetail={groupDetail} 
+            messages={messages} 
+            isChatSending={isChatSending} 
+            sendChatMessage={sendChatMessage} 
+          />
         </div>
       </main>
       <BottomNav activePage={activePage} onChange={setActivePage} />

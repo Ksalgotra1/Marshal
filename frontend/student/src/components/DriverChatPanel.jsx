@@ -1,28 +1,18 @@
+import { useState } from 'react'
 import { Bot, MessageCircle, SendHorizontal, UserRound } from 'lucide-react'
 
-const PLACEHOLDER_MESSAGES = [
-  {
-    id: 'system-1',
-    from: 'system',
-    body: 'Driver chat will appear here after a group is assigned.',
-    at: 'Pending',
-  },
-  {
-    id: 'driver-1',
-    from: 'driver',
-    body: 'Placeholder: I am near the pickup gate. Share the exact spot when ready.',
-    at: 'Telegram relay',
-  },
-  {
-    id: 'student-1',
-    from: 'student',
-    body: 'Placeholder: Waiting at the marked pickup point.',
-    at: 'Draft',
-  },
-]
-
-export function DriverChatPanel({ activeRequest, groupDetail }) {
+export function DriverChatPanel({ activeRequest, groupDetail, messages = [], isChatSending, sendChatMessage }) {
   const assigned = groupDetail?.group?.status === 'assigned'
+  const [inputText, setInputText] = useState('')
+
+  const handleSend = async (e) => {
+    e.preventDefault()
+    if (!inputText.trim() || !assigned || isChatSending) return
+    const success = await sendChatMessage(inputText)
+    if (success) {
+      setInputText('')
+    }
+  }
 
   return (
     <section className="liquid-panel driver-chat-panel" id="chat">
@@ -35,14 +25,21 @@ export function DriverChatPanel({ activeRequest, groupDetail }) {
       </div>
 
       <div className="chat-thread">
-        {PLACEHOLDER_MESSAGES.map(message => {
-          const Icon = message.from === 'driver' ? UserRound : message.from === 'system' ? Bot : MessageCircle
+        {(messages.length === 0 ? [{
+          id: 'system-1',
+          sender_type: 'system',
+          content: 'Driver chat will appear here after a group is assigned.',
+        }] : messages).map(message => {
+          const fromType = message.sender_type || message.from // fallback
+          const Icon = fromType === 'driver' ? UserRound : fromType === 'system' ? Bot : MessageCircle
+          const timeLabel = message.created_at ? new Date(message.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
+          
           return (
-            <article className={`chat-message ${message.from}`} key={message.id}>
+            <article className={`chat-message ${fromType}`} key={message.id}>
               <span className="chat-avatar"><Icon size={15} /></span>
               <div>
-                <p>{message.body}</p>
-                <time>{message.at}</time>
+                <p>{message.content || message.body}</p>
+                {timeLabel && <time>{timeLabel}</time>}
               </div>
             </article>
           )
@@ -51,11 +48,16 @@ export function DriverChatPanel({ activeRequest, groupDetail }) {
 
       <div className="chat-compose">
         <input
-          value={activeRequest ? 'Telegram bot integration pending' : 'Create a ride request first'}
-          readOnly
+          value={assigned ? inputText : ''}
+          placeholder={!assigned ? (activeRequest ? 'Waiting for assignment...' : 'Create a ride request first') : "Message driver..."}
+          onChange={e => setInputText(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleSend(e)
+          }}
+          readOnly={!assigned || isChatSending}
           aria-label="Driver chat message"
         />
-        <button type="button" disabled aria-label="Send driver message">
+        <button type="button" disabled={!assigned || isChatSending || !inputText.trim()} onClick={handleSend} aria-label="Send driver message">
           <SendHorizontal size={17} />
         </button>
       </div>

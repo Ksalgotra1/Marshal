@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 const STORAGE_KEY = 'marshal.student.requestId'
 const EVENT_TYPES = new Set([
@@ -60,6 +60,33 @@ export function useStudentDashboard() {
   const [isBusy, setIsBusy] = useState(false)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [lastSyncAt, setLastSyncAt] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [isChatSending, setIsChatSending] = useState(false)
+  
+  const groupId = groupDetail?.group?.id
+
+  const prevGroupIdRef = useRef(groupId)
+  useEffect(() => {
+    if (groupId && prevGroupIdRef.current && groupId !== prevGroupIdRef.current) {
+      setMessages([])
+    }
+    prevGroupIdRef.current = groupId
+  }, [groupId])
+
+  const mergeMessages = useCallback((newMessages) => {
+    setMessages(current => {
+      const merged = [...current]
+      let changed = false
+      for (const msg of newMessages) {
+        if (!merged.some(m => m.id === msg.id)) {
+          merged.push(msg)
+          changed = true
+        }
+      }
+      if (!changed) return current
+      return merged.sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+    })
+  }, [])
 
   const refresh = useCallback(async () => {
     setIsRefreshing(true)
@@ -96,11 +123,20 @@ export function useStudentDashboard() {
   }, [refresh])
 
   useEffect(() => {
-    const source = new EventSource('/events?room=global')
+    const room = groupId ? `global,${groupId}` : 'global'
+    const source = new EventSource(`/events?room=${room}`)
 
     source.onmessage = event => {
       try {
         const payload = JSON.parse(event.data)
+        
+        if (payload?.type === 'chat:message') {
+          if (payload.group_id === groupId && payload.data?.id) {
+            mergeMessages([payload.data])
+          }
+          return
+        }
+
         if (!EVENT_TYPES.has(payload?.type)) return
 
         const line = toEventLine(payload)
@@ -111,8 +147,43 @@ export function useStudentDashboard() {
       }
     }
 
-    return () => source.close()
-  }, [refresh])
+    let cancelled = false
+    if (groupId) {
+      requestJSON(`/api/groups/${groupId}/messages`)
+        .then(msgs => {
+          if (!cancelled && Array.isArray(msgs)) {
+            mergeMessages(msgs)
+          }
+        })
+        .catch(() => null)
+    }
+
+    return () => {
+      cancelled = true
+      source.close()
+    }
+  }, [refresh, groupId, mergeMessages])
+
+  const sendChatMessage = useCallback(async (content) => {
+    if (!groupId) return false
+    setIsChatSending(true)
+    setError(null)
+    try {
+      const res = await requestJSON(`/api/groups/${groupId}/messages`, {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      })
+      if (res?.message) {
+        mergeMessages([res.message])
+      }
+      return true
+    } catch (err) {
+      setError(err.message || 'Unable to send message')
+      return false
+    } finally {
+      setIsChatSending(false)
+    }
+  }, [groupId, mergeMessages])
 
   const submitRequest = useCallback(async payload => {
     setIsBusy(true)
@@ -177,6 +248,9 @@ export function useStudentDashboard() {
     refresh,
     resetRequest,
     setError,
+    messages,
+    isChatSending,
+    sendChatMessage,
   }), [
     activeRequest,
     events,
@@ -190,5 +264,8 @@ export function useStudentDashboard() {
     joinGroup,
     refresh,
     resetRequest,
+    messages,
+    isChatSending,
+    sendChatMessage,
   ])
 }
