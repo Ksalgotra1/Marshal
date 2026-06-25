@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,10 +21,11 @@ import (
 
 // Handlers bundles all HTTP handler dependencies.
 type Handlers struct {
-	Pool      *pgxpool.Pool
-	ServerCtx context.Context
-	Events    EventPublisher
-	WebSocket WebSocketUpgrader
+	Pool          *pgxpool.Pool
+	ServerCtx     context.Context
+	Events        EventPublisher
+	WebSocket     WebSocketUpgrader
+	MessageSender MessageSender
 }
 
 type EventPublisher interface {
@@ -32,6 +34,10 @@ type EventPublisher interface {
 
 type WebSocketUpgrader interface {
 	HandleUpgrade(http.ResponseWriter, *http.Request)
+}
+
+type MessageSender interface {
+	SendMessage(ctx context.Context, chatID int64, text string) error
 }
 
 // HandleCreateRequest handles POST /api/requests.
@@ -189,6 +195,10 @@ func (h *Handlers) HandleJoinGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := gs.AddMember(r.Context(), groupID, body.RequestID); err != nil {
+		if errors.Is(err, store.ErrGroupNotJoinable) {
+			api.WriteRequestError(w, r, http.StatusConflict, "group is no longer open", err, "group_id", groupID)
+			return
+		}
 		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to join group", err, "group_id", groupID)
 		return
 	}
@@ -231,6 +241,85 @@ func validatePayload(p *models.CreateRequestPayload) error {
 		return fmt.Errorf("arrive_by must be at least 10 minutes from now")
 	}
 	return nil
+}
+
+// ─── Chat Handlers ────────────────────────────────────────────────────────
+
+// HandleListMessages handles GET /api/groups/{id}/messages.
+func (h *Handlers) HandleListMessages(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+	
+	// Check if group exists to 404 properly instead of returning empty list
+	gs := &store.GroupStore{DB: h.Pool}
+	if _, err := gs.GetByID(r.Context(), groupID); err != nil {
+		api.WriteRequestError(w, r, http.StatusNotFound, "group not found", nil, "lookup_id", groupID)
+		return
+	}
+
+	cs := &store.ChatStore{DB: h.Pool}
+	messages, err := cs.ListMessages(r.Context(), groupID)
+	if err != nil {
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to list messages", err)
+		return
+	}
+
+	// Make sure we return an empty array instead of null for empty history
+	if messages == nil {
+		messages = []models.ChatMessage{}
+	}
+	api.WriteJSON(w, http.StatusOK, messages)
+}
+
+// HandleCreateMessage handles POST /api/groups/{id}/messages.
+func (h *Handlers) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
+	groupID := r.PathValue("id")
+
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Content == "" {
+		api.WriteRequestError(w, r, http.StatusBadRequest, "content is required", err)
+		return
+	}
+
+	// Verify group exists
+	gs := &store.GroupStore{DB: h.Pool}
+	group, err := gs.GetByID(r.Context(), groupID)
+	if err != nil {
+		api.WriteRequestError(w, r, http.StatusNotFound, "group not found", nil, "lookup_id", groupID)
+		return
+	}
+
+	cs := &store.ChatStore{DB: h.Pool}
+	msg, err := cs.AddMessage(r.Context(), groupID, "student", body.Content)
+	if err != nil {
+		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to create message", err)
+		return
+	}
+
+	if h.Events != nil {
+		h.Events.BroadcastMulti([]string{groupID}, realtime.ChatMessageEvent(*msg))
+	}
+
+	deliveredToDriver := false
+	if group.DriverID != nil {
+		ds := &store.DriverStore{DB: h.Pool}
+		if driver, err := ds.GetByID(r.Context(), *group.DriverID); err == nil {
+			if driver.TelegramChat != nil && h.MessageSender != nil {
+				err := h.MessageSender.SendMessage(r.Context(), *driver.TelegramChat, body.Content)
+				if err != nil {
+					slog.Error("failed to send message to driver", "error", err, "driver_id", driver.ID)
+				} else {
+					deliveredToDriver = true
+				}
+			}
+		}
+	}
+
+	api.WriteJSON(w, http.StatusOK, api.JSON{
+		"message":             msg,
+		"delivered_to_driver": deliveredToDriver,
+	})
 }
 
 // ─── Driver Handlers ────────────────────────────────────────────────────────

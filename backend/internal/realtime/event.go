@@ -3,6 +3,8 @@ package realtime
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/Ksalgotra1/Marshal/internal/models"
 )
 
 // Event is a real-time message pushed to live clients.
@@ -105,6 +107,18 @@ func SystemConnections(count int) Event {
 		Data: map[string]any{
 			"connections": count,
 		},
+		Timestamp: time.Now(),
+	}
+}
+
+// ChatMessageEvent creates an event for a new chat message.
+// IMPORTANT: This event should only be broadcasted to the specific group ID,
+// and NOT to the "global" room, to ensure ride privacy.
+func ChatMessageEvent(msg models.ChatMessage) Event {
+	return Event{
+		Type:      "chat:message",
+		GroupID:   msg.GroupID,
+		Data:      msg,
 		Timestamp: time.Now(),
 	}
 }

@@ -20,8 +20,8 @@ type DriverStore struct{ DB DBTX }
 func (s *DriverStore) Register(ctx context.Context, name string, telegramID int64) (string, error) {
 	var id string
 	err := s.DB.QueryRow(ctx, `
-		INSERT INTO drivers (name, telegram_id)
-		VALUES ($1, $2)
+		INSERT INTO drivers (name, telegram_id, status)
+		VALUES ($1, $2, 'online')
 		ON CONFLICT (telegram_id) DO UPDATE SET name = EXCLUDED.name
 		RETURNING id
 	`, name, telegramID).Scan(&id)

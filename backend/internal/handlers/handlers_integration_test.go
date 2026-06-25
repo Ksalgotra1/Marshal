@@ -155,3 +155,31 @@ func (s *HandlersIntegrationSuite) TestJoinGroup_CapacityLimit() {
 	json.Unmarshal(rec.Body.Bytes(), &response)
 	s.Contains(response["error"], "group is full")
 }
+
+func (s *HandlersIntegrationSuite) TestCreateMessage_NilSender() {
+	// Create a group
+	var groupID string
+	s.Require().NoError(s.db.Pool.QueryRow(s.ctx, `
+		INSERT INTO ride_groups (status, route_score, arrive_by) VALUES ('grouped', 50, NOW() + INTERVAL '1 hour') RETURNING id
+	`).Scan(&groupID))
+
+	// The handlers suite setup doesn't set a MessageSender, so it is nil by default
+	s.handlers.MessageSender = nil
+
+	// Add the route temporarily for the test (the suite setup only added a few)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/groups/{id}/messages", s.handlers.HandleCreateMessage)
+	handler := api.RequestIDMiddleware(api.CORSMiddleware(mux))
+
+	payload := map[string]string{"content": "Hello driver!"}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/api/groups/"+groupID+"/messages", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	s.Equal(http.StatusOK, rec.Code)
+	var response map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &response)
+	s.Equal(false, response["delivered_to_driver"])
+}

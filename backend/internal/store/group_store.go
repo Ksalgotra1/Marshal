@@ -2,12 +2,15 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/models"
 )
+
+var ErrGroupNotJoinable = errors.New("group not joinable")
 
 // GroupFilter holds query parameters for filtered group listing.
 type GroupFilter struct {
@@ -64,7 +67,7 @@ func (s *GroupStore) ListOpen(ctx context.Context) ([]models.RideGroup, error) {
 		SELECT id, status, priority, route_score, arrive_by, expected_departure, driver_id,
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups
-		WHERE status = 'grouped' AND driver_id IS NULL AND arrive_by > NOW()
+		WHERE status IN ('grouped', 'dispatching') AND driver_id IS NULL AND arrive_by > NOW()
 		ORDER BY (CASE WHEN priority = 'high' THEN 0 ELSE 1 END), route_score DESC
 	`)
 	if err != nil {
@@ -196,6 +199,17 @@ func (s *GroupStore) PopHighestScore(ctx context.Context) (*models.RideGroup, er
 
 // AddMember joins a ride request to an existing open group.
 func (s *GroupStore) AddMember(ctx context.Context, groupID, requestID string) error {
+	cmd, err := s.DB.Exec(ctx, `
+		UPDATE ride_groups SET updated_at = NOW()
+		WHERE id = $1 AND status IN ('grouped', 'dispatching') AND driver_id IS NULL
+	`, groupID)
+	if err != nil {
+		return fmt.Errorf("GroupStore.AddMember check: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrGroupNotJoinable
+	}
+
 	if _, err := s.DB.Exec(ctx,
 		`INSERT INTO group_members (request_id, group_id) VALUES ($1, $2)`,
 		requestID, groupID,
@@ -208,11 +222,27 @@ func (s *GroupStore) AddMember(ctx context.Context, groupID, requestID string) e
 	); err != nil {
 		return fmt.Errorf("GroupStore.AddMember update request: %w", err)
 	}
-	_, err := s.DB.Exec(ctx,
-		`UPDATE ride_groups SET updated_at = NOW() WHERE id = $1`,
-		groupID,
+	return nil
+}
+
+// GetActiveForDriver fetches the driver's currently assigned group.
+func (s *GroupStore) GetActiveForDriver(ctx context.Context, driverID string) (*models.RideGroup, error) {
+	var g models.RideGroup
+	err := s.DB.QueryRow(ctx, `
+		SELECT id, status, priority, route_score, arrive_by, expected_departure, driver_id,
+		       dispatch_attempts, telegram_msg_id, created_at, updated_at
+		FROM ride_groups
+		WHERE driver_id = $1 AND status = 'assigned'
+		ORDER BY updated_at DESC
+		LIMIT 1
+	`, driverID).Scan(
+		&g.ID, &g.Status, &g.Priority, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
+		&g.DriverID, &g.DispatchAttempts, &g.TelegramMsgID, &g.CreatedAt, &g.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return nil, fmt.Errorf("GroupStore.GetActiveForDriver: %w", err)
+	}
+	return &g, nil
 }
 
 // GetMemberRequestIDs returns all request IDs belonging to a group.
