@@ -8,7 +8,7 @@ const STEPS = [
 ]
 
 function stepIndex(request, groupDetail) {
-  if (groupDetail?.group?.status === 'assigned') return 3
+  if (groupDetail?.group?.status === 'assigned' || groupDetail?.group?.status === 'completed') return 3
   if (groupDetail?.group?.status === 'dispatching') return 2
   if (request?.group_id || groupDetail?.group) return 1
   if (request) return 0
