@@ -165,9 +165,10 @@ func grouperProcess(pool *pgxpool.Pool, events grouper.EventPublisher) worker.Pr
 	return func(ctx context.Context, p *pgxpool.Pool, payload []byte) error {
 		engine := &grouper.Engine{Pool: p, Events: events}
 		engine.Run(ctx)
-		// Enqueue an assign_group job and wake assigner via NOTIFY
+		// Enqueue an immediate check, and a delayed check for the 2-minute pooling window
 		js := &store.JobStore{DB: pool}
 		js.Enqueue(ctx, "assign_group", struct{}{}, models.PriorityNormal, time.Now())
+		js.Enqueue(ctx, "assign_group", struct{}{}, models.PriorityNormal, time.Now().Add(2*time.Minute))
 		worker.Notify(ctx, pool, "assigner_wakeup")
 		return nil
 	}

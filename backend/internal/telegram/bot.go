@@ -24,6 +24,7 @@ type GroupStorer interface {
 	GetByIDWithMembers(ctx context.Context, id string) (*store.GroupDetail, error)
 	GetActiveForDriver(ctx context.Context, driverID string) (*models.RideGroup, error)
 	CompleteRide(ctx context.Context, groupID, driverID string) (bool, error)
+	PassGroup(ctx context.Context, groupID string) error
 }
 
 type DriverStorer interface {
@@ -31,10 +32,11 @@ type DriverStorer interface {
 	SetTelegramChat(ctx context.Context, telegramID int64, chatID int64) error
 	SetStatus(ctx context.Context, id, status string) error
 	Touch(ctx context.Context, telegramID int64) error
+	Register(ctx context.Context, name string, telegramID int64) (string, error)
 }
 
 type ChatStorer interface {
-	AddMessage(ctx context.Context, groupID, senderType, content string) (*models.ChatMessage, error)
+	AddMessage(ctx context.Context, groupID, senderType, senderName, content string) (*models.ChatMessage, error)
 }
 
 type EventPublisher interface {
@@ -170,6 +172,27 @@ func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
 
 	if update.Message != nil && update.Message.Chat.Type == "private" {
 		if isCommand(update.Message.Text, "/start") {
+			_, err := b.ds.GetByTelegramID(ctx, update.Message.From.ID)
+			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					// Seamlessly register new driver
+					name := update.Message.From.FirstName
+					if name == "" {
+						name = update.Message.From.Username
+					}
+					if name == "" {
+						name = "Telegram Driver"
+					}
+					if _, regErr := b.ds.Register(ctx, name, update.Message.From.ID); regErr != nil {
+						slog.Error("telegram: failed to auto-register driver", "error", regErr)
+						return
+					}
+				} else {
+					slog.Error("telegram: failed to lookup driver", "error", err)
+					return
+				}
+			}
+
 			if err := b.ds.SetTelegramChat(ctx, update.Message.From.ID, update.Message.Chat.ID); err != nil {
 				slog.Error("telegram: failed to set chat", "error", err)
 				return
@@ -207,13 +230,23 @@ func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
 	if update.CallbackQuery != nil {
 		if strings.HasPrefix(update.CallbackQuery.Data, "accept:") {
 			b.handleAccept(ctx, *update.CallbackQuery)
+		} else if strings.HasPrefix(update.CallbackQuery.Data, "pass:") {
+			groupID := strings.TrimPrefix(update.CallbackQuery.Data, "pass:")
+			
+			// Revert the group back to 'grouped' status
+			if err := b.gs.PassGroup(ctx, groupID); err != nil {
+				slog.Error("telegram: failed to pass group", "error", err)
+				_ = b.AnswerCallback(ctx, update.CallbackQuery.ID, "Failed to pass. Maybe it's already assigned or timed out.")
+			} else {
+				_ = b.AnswerCallback(ctx, update.CallbackQuery.ID, "")
+				_ = b.EditMessage(ctx, update.CallbackQuery.Message.MessageID, "⏭ Passed. Waiting for next dispatch.")
+				
+				// Broadcast event that group is available again (using a log since there is no GroupCreated)
+				slog.Info("telegram: group passed, reverted to grouped", "group_id", groupID)
+			}
 		} else {
 			_ = b.AnswerCallback(ctx, update.CallbackQuery.ID, "")
-			if strings.HasPrefix(update.CallbackQuery.Data, "pass:") {
-				// do nothing after AnswerCallback
-			} else {
-				slog.Info("telegram: unknown callback data", "data", update.CallbackQuery.Data)
-			}
+			slog.Info("telegram: unknown callback data", "data", update.CallbackQuery.Data)
 		}
 	}
 }
@@ -273,7 +306,11 @@ func (b *Bot) handleDriverMessage(ctx context.Context, msg Message) {
 		return
 	}
 
-	chatMsg, err := b.cs.AddMessage(ctx, group.ID, "driver", msg.Text)
+	driverName := msg.From.FirstName
+	if driverName == "" {
+		driverName = "Driver"
+	}
+	chatMsg, err := b.cs.AddMessage(ctx, group.ID, "driver", driverName, msg.Text)
 	if err != nil {
 		slog.Error("telegram: failed to add driver message to chat", "error", err)
 		return

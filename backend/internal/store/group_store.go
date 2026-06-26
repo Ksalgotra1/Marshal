@@ -181,6 +181,7 @@ func (s *GroupStore) PopHighestScore(ctx context.Context) (*models.RideGroup, er
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups
 		WHERE status = 'grouped' AND driver_id IS NULL
+		  AND created_at <= NOW() - interval '2 minutes'
 		ORDER BY (CASE WHEN priority = 'high' THEN 0 ELSE 1 END), route_score DESC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
@@ -357,6 +358,22 @@ func (s *GroupStore) CancelMaxRetries(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return cmd.RowsAffected(), nil
+}
+
+// PassGroup reverts a group's status from 'dispatching' back to 'grouped', opening it up for other drivers.
+func (s *GroupStore) PassGroup(ctx context.Context, groupID string) error {
+	cmd, err := s.DB.Exec(ctx, `
+		UPDATE ride_groups
+		SET status = 'grouped', updated_at = NOW()
+		WHERE id = $1 AND status = 'dispatching'
+	`, groupID)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return errors.New("group not in dispatching state or not found")
+	}
+	return nil
 }
 
 func scanGroups(rows interface {
