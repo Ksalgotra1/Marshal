@@ -749,8 +749,31 @@ select:disabled {
   background: rgba(0, 0, 0, 0.28);
 }
 
-.chat-message.student div {
-  background: rgba(59, 158, 255, 0.1);
+.chat-message.me {
+  grid-template-columns: minmax(0, 1fr) auto;
+  text-align: right;
+}
+
+.chat-message.me div {
+  background: rgba(59, 158, 255, 0.15);
+  border-color: rgba(59, 158, 255, 0.3);
+}
+
+.chat-message.other div {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: rgba(168, 85, 247, 0.3);
+}
+
+.chat-message.driver div {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.chat-sender-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--blue);
+  margin-bottom: 4px;
 }
 
 .chat-message p {

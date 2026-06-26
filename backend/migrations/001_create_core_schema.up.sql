@@ -73,6 +73,7 @@ CREATE TABLE chat_messages (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     group_id    UUID REFERENCES ride_groups(id) NOT NULL,
     sender_type TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
     content     TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

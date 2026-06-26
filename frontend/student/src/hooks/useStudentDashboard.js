@@ -172,7 +172,7 @@ export function useStudentDashboard() {
     try {
       const res = await requestJSON(`/api/groups/${groupId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, request_id: activeRequest?.id }),
       })
       if (res?.message) {
         mergeMessages([res.message])
@@ -184,7 +184,7 @@ export function useStudentDashboard() {
     } finally {
       setIsChatSending(false)
     }
-  }, [groupId, mergeMessages])
+  }, [groupId, activeRequest?.id, mergeMessages])
 
   const submitRequest = useCallback(async payload => {
     setIsBusy(true)

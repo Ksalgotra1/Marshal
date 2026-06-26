@@ -31,16 +31,38 @@ export function DriverChatPanel({ activeRequest, groupDetail, messages = [], isC
           content: 'Driver chat will appear here after a group is assigned.',
         }] : messages).map(message => {
           const fromType = message.sender_type || message.from // fallback
-          const Icon = fromType === 'driver' ? UserRound : fromType === 'system' ? Bot : MessageCircle
+          let chatClass = fromType
+          let avatarContent = <UserRound size={15} />
+          let senderLabel = ''
+
+          if (fromType === 'student') {
+            const myName = activeRequest?.requester_name ? activeRequest.requester_name.split(' ')[0] : ''
+            if (message.sender_name && message.sender_name === myName) {
+              chatClass = 'me'
+            } else {
+              chatClass = 'other'
+            }
+            avatarContent = message.sender_name ? message.sender_name.substring(0, 2).toUpperCase() : <UserRound size={15} />
+          } else if (fromType === 'driver') {
+            chatClass = 'driver'
+            senderLabel = `Driver: ${message.sender_name || ''}`
+            avatarContent = <UserRound size={15} />
+          } else if (fromType === 'system') {
+            chatClass = 'system'
+            avatarContent = <Bot size={15} />
+          }
+
           const timeLabel = message.created_at ? new Date(message.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : ''
           
           return (
-            <article className={`chat-message ${fromType}`} key={message.id}>
-              <span className="chat-avatar"><Icon size={15} /></span>
+            <article className={`chat-message ${chatClass}`} key={message.id}>
+              {chatClass !== 'me' && <span className="chat-avatar">{avatarContent}</span>}
               <div>
+                {senderLabel && <div className="chat-sender-label">{senderLabel}</div>}
                 <p>{message.content || message.body}</p>
                 {timeLabel && <time>{timeLabel}</time>}
               </div>
+              {chatClass === 'me' && <span className="chat-avatar">{avatarContent}</span>}
             </article>
           )
         })}

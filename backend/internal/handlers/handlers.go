@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/api"
@@ -275,7 +276,8 @@ func (h *Handlers) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	groupID := r.PathValue("id")
 
 	var body struct {
-		Content string `json:"content"`
+		Content   string `json:"content"`
+		RequestID string `json:"request_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Content == "" {
 		api.WriteRequestError(w, r, http.StatusBadRequest, "content is required", err)
@@ -290,8 +292,16 @@ func (h *Handlers) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	senderName := "Unknown"
+	if body.RequestID != "" {
+		rs := &store.RequestStore{DB: h.Pool}
+		if req, err := rs.GetByID(r.Context(), body.RequestID); err == nil {
+			senderName = strings.Split(req.RequesterName, " ")[0]
+		}
+	}
+
 	cs := &store.ChatStore{DB: h.Pool}
-	msg, err := cs.AddMessage(r.Context(), groupID, "student", body.Content)
+	msg, err := cs.AddMessage(r.Context(), groupID, "student", senderName, body.Content)
 	if err != nil {
 		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to create message", err)
 		return
@@ -306,7 +316,15 @@ func (h *Handlers) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 		ds := &store.DriverStore{DB: h.Pool}
 		if driver, err := ds.GetByID(r.Context(), *group.DriverID); err == nil {
 			if driver.TelegramChat != nil && h.MessageSender != nil {
-				err := h.MessageSender.SendMessage(r.Context(), *driver.TelegramChat, body.Content)
+				driverMsg := body.Content
+				if body.RequestID != "" {
+					rs := &store.RequestStore{DB: h.Pool}
+					if req, err := rs.GetByID(r.Context(), body.RequestID); err == nil {
+						driverMsg = fmt.Sprintf("👤 %s\n💬 %s", req.RequesterName, body.Content)
+					}
+				}
+				
+				err := h.MessageSender.SendMessage(r.Context(), *driver.TelegramChat, driverMsg)
 				if err != nil {
 					slog.Error("failed to send message to driver", "error", err, "driver_id", driver.ID)
 				} else {

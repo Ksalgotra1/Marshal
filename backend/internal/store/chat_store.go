@@ -11,14 +11,14 @@ import (
 type ChatStore struct{ DB DBTX }
 
 // AddMessage inserts a new chat message into the group's chat.
-func (s *ChatStore) AddMessage(ctx context.Context, groupID, senderType, content string) (*models.ChatMessage, error) {
+func (s *ChatStore) AddMessage(ctx context.Context, groupID, senderType, senderName, content string) (*models.ChatMessage, error) {
 	var m models.ChatMessage
 	err := s.DB.QueryRow(ctx, `
-		INSERT INTO chat_messages (group_id, sender_type, content)
-		VALUES ($1, $2, $3)
-		RETURNING id, group_id, sender_type, content, created_at
-	`, groupID, senderType, content).Scan(
-		&m.ID, &m.GroupID, &m.SenderType, &m.Content, &m.CreatedAt,
+		INSERT INTO chat_messages (group_id, sender_type, sender_name, content)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, group_id, sender_type, sender_name, content, created_at
+	`, groupID, senderType, senderName, content).Scan(
+		&m.ID, &m.GroupID, &m.SenderType, &m.SenderName, &m.Content, &m.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("ChatStore.AddMessage: %w", err)
@@ -29,7 +29,7 @@ func (s *ChatStore) AddMessage(ctx context.Context, groupID, senderType, content
 // ListMessages fetches recent messages for a group, ordered oldest-first.
 func (s *ChatStore) ListMessages(ctx context.Context, groupID string) ([]models.ChatMessage, error) {
 	rows, err := s.DB.Query(ctx, `
-		SELECT id, group_id, sender_type, content, created_at
+		SELECT id, group_id, sender_type, sender_name, content, created_at
 		FROM chat_messages
 		WHERE group_id = $1
 		ORDER BY created_at ASC
@@ -43,7 +43,7 @@ func (s *ChatStore) ListMessages(ctx context.Context, groupID string) ([]models.
 	var messages []models.ChatMessage
 	for rows.Next() {
 		var m models.ChatMessage
-		if err := rows.Scan(&m.ID, &m.GroupID, &m.SenderType, &m.Content, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.GroupID, &m.SenderType, &m.SenderName, &m.Content, &m.CreatedAt); err != nil {
 			return nil, err
 		}
 		messages = append(messages, m)
