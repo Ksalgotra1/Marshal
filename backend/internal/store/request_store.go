@@ -13,12 +13,12 @@ type RequestStore struct{ DB DBTX }
 
 // Create inserts a new ride request, computing H3 cells server-side.
 func (s *RequestStore) Create(ctx context.Context, req *models.CreateRequestPayload) (string, error) {
-	// Compute H3 hexagonal indices at resolution 9 (~174m radius)
-	pickupCell, err := h3.LatLngToCell(h3.LatLng{Lat: req.PickupLat, Lng: req.PickupLng}, 9)
+	// Compute H3 hexagonal indices at resolution 7 (larger radius to cover up to ~3.5km in pass 2)
+	pickupCell, err := h3.LatLngToCell(h3.LatLng{Lat: req.PickupLat, Lng: req.PickupLng}, 7)
 	if err != nil {
 		return "", fmt.Errorf("invalid pickup coordinates for H3: %w", err)
 	}
-	dropoffCell, err := h3.LatLngToCell(h3.LatLng{Lat: req.DropoffLat, Lng: req.DropoffLng}, 9)
+	dropoffCell, err := h3.LatLngToCell(h3.LatLng{Lat: req.DropoffLat, Lng: req.DropoffLng}, 7)
 	if err != nil {
 		return "", fmt.Errorf("invalid dropoff coordinates for H3: %w", err)
 	}

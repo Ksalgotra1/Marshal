@@ -5,7 +5,6 @@ import (
 
 	"github.com/Ksalgotra1/Marshal/internal/geo"
 	"github.com/Ksalgotra1/Marshal/internal/models"
-	"github.com/uber/h3-go/v4"
 )
 
 type GroupType int
@@ -22,19 +21,19 @@ type MatchResult struct {
 
 type Request = models.RideRequest
 
+// CheckCorridor determines if two requests can share a route based on bearing
+// and cross-track distance. It does NOT check pickup-cell distance (e.g. H3 GridDistance).
+// The grid distance is handled entirely by the candidate pool selection (GridDisk)
+// before this function is called. Checking it here again contradicts the 3-pass search
+// and breaks en-route matching for distant pickups.
 func CheckCorridor(a, b Request) MatchResult {
 	// fail fast if H3 cells are missing
 	if a.PickupH3 == nil || b.PickupH3 == nil {
 		return MatchResult{Compatible: false}
 	}
 
-	// pickup cells must be same or k-ring 1
-	if *a.PickupH3 != *b.PickupH3 {
-		dist, err := h3.GridDistance(h3.Cell(*a.PickupH3), h3.Cell(*b.PickupH3))
-		if err != nil || dist > 1 {
-			return MatchResult{Compatible: false}
-		}
-	}
+	// removed: pickup cells must be same or k-ring 1
+	// (H3 distance check was redundant and pass-blind, breaking pass 2/3)
 
 	pA := geo.LatLng{Lat: a.PickupLat, Lng: a.PickupLng}
 	dA := geo.LatLng{Lat: a.DropoffLat, Lng: a.DropoffLng}
@@ -64,6 +63,10 @@ func CheckCorridor(a, b Request) MatchResult {
 		return MatchResult{Compatible: false}
 	}
 
+	// Note: With H3 resolution lowered to 7 for better pickup candidate reach,
+	// dropoff cells are also coarser (~1.2km edge). This means dropoffs up to
+	// ~1.2km apart may now be grouped as GroupTypeExact. This tradeoff is
+	// acceptable as riders dropped within 1km plausibly count as the same trip.
 	if a.DropoffH3 != nil && b.DropoffH3 != nil && *a.DropoffH3 == *b.DropoffH3 {
 		return MatchResult{Type: GroupTypeExact, Compatible: true}
 	}
