@@ -90,6 +90,17 @@ func GroupCancelled(groupID string, reason string) Event {
 	}
 }
 
+func GroupCompleted(groupID, driverID string) Event {
+	return Event{
+		Type:      "group:completed",
+		GroupID:   groupID,
+		Data: map[string]any{
+			"driver_id": driverID,
+		},
+		Timestamp: time.Now(),
+	}
+}
+
 func MemberJoined(groupID, requesterName string) Event {
 	return Event{
 		Type:    "member:joined",

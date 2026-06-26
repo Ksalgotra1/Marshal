@@ -23,6 +23,7 @@ type GroupStorer interface {
 	ClaimGroup(ctx context.Context, groupID, driverID string) (int64, error)
 	GetByIDWithMembers(ctx context.Context, id string) (*store.GroupDetail, error)
 	GetActiveForDriver(ctx context.Context, driverID string) (*models.RideGroup, error)
+	CompleteRide(ctx context.Context, groupID, driverID string) (bool, error)
 }
 
 type DriverStorer interface {
@@ -177,6 +178,13 @@ func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
 		return
 	}
 
+	if update.Message != nil &&
+		update.Message.Chat.Type == "private" &&
+		(strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/complete") || strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/done")) {
+		b.handleCompleteRide(ctx, *update.Message)
+		return
+	}
+
 	if update.CallbackQuery != nil {
 		if strings.HasPrefix(update.CallbackQuery.Data, "accept:") {
 			b.handleAccept(ctx, *update.CallbackQuery)
@@ -234,9 +242,6 @@ func (b *Bot) handleDriverMessage(ctx context.Context, msg Message) {
 		slog.Error("handleDriverMessage: driver lookup failed", "error", err)
 		return
 	}
-	if driver == nil {
-		return
-	}
 
 	group, err := b.gs.GetActiveForDriver(ctx, driver.ID)
 	if err != nil {
@@ -245,10 +250,6 @@ func (b *Bot) handleDriverMessage(ctx context.Context, msg Message) {
 			return
 		}
 		slog.Error("handleDriverMessage: active group lookup failed", "error", err)
-		_ = b.SendMessage(ctx, msg.Chat.ID, "You don't have an active ride.")
-		return
-	}
-	if group == nil {
 		_ = b.SendMessage(ctx, msg.Chat.ID, "You don't have an active ride.")
 		return
 	}
@@ -261,5 +262,45 @@ func (b *Bot) handleDriverMessage(ctx context.Context, msg Message) {
 
 	if b.events != nil {
 		b.events.BroadcastMulti([]string{group.ID}, realtime.ChatMessageEvent(*chatMsg))
+	}
+}
+
+func (b *Bot) handleCompleteRide(ctx context.Context, msg Message) {
+	driver, err := b.ds.GetByTelegramID(ctx, msg.From.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			_ = b.SendMessage(ctx, msg.Chat.ID, "You are not registered as a driver.")
+			return
+		}
+		slog.Error("handleCompleteRide: driver lookup failed", "error", err)
+		return
+	}
+
+	group, err := b.gs.GetActiveForDriver(ctx, driver.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			_ = b.SendMessage(ctx, msg.Chat.ID, "You don't have an active ride.")
+			return
+		}
+		slog.Error("handleCompleteRide: active group lookup failed", "error", err)
+		return
+	}
+
+	completed, err := b.gs.CompleteRide(ctx, group.ID, driver.ID)
+	if err != nil {
+		slog.Error("handleCompleteRide: CompleteRide failed", "error", err)
+		return
+	}
+	if !completed {
+		_ = b.SendMessage(ctx, msg.Chat.ID, "Ride already closed out.")
+		return
+	}
+
+	_ = b.ds.SetStatus(ctx, driver.ID, "online")
+
+	_ = b.SendMessage(ctx, msg.Chat.ID, "✅ Ride completed! You are now available for new dispatch requests.")
+
+	if b.events != nil {
+		b.events.BroadcastMulti([]string{"global", group.ID}, realtime.GroupCompleted(group.ID, driver.ID))
 	}
 }

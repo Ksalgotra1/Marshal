@@ -7,6 +7,7 @@ const EVENT_TYPES = new Set([
   'group:dispatching',
   'group:assigned',
   'group:cancelled',
+  'group:completed',
   'member:joined',
 ])
 

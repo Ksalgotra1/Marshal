@@ -22,6 +22,7 @@ type fakeGroupStore struct {
 	claimGroupFunc         func(ctx context.Context, groupID, driverID string) (int64, error)
 	getByIDWithMembersFunc func(ctx context.Context, id string) (*store.GroupDetail, error)
 	getActiveForDriverFunc func(ctx context.Context, driverID string) (*models.RideGroup, error)
+	completeRideFunc       func(ctx context.Context, groupID, driverID string) (bool, error)
 }
 
 func (f *fakeGroupStore) ClaimGroup(ctx context.Context, groupID, driverID string) (int64, error) {
@@ -37,6 +38,13 @@ func (f *fakeGroupStore) GetActiveForDriver(ctx context.Context, driverID string
 		return f.getActiveForDriverFunc(ctx, driverID)
 	}
 	return nil, nil
+}
+
+func (f *fakeGroupStore) CompleteRide(ctx context.Context, groupID, driverID string) (bool, error) {
+	if f.completeRideFunc != nil {
+		return f.completeRideFunc(ctx, groupID, driverID)
+	}
+	return true, nil
 }
 
 type fakeChatStore struct {
@@ -438,4 +446,143 @@ func TestHandleDriverMessage_DBErrorLogs(t *testing.T) {
 
 	assert.Contains(t, logBuf.String(), "handleDriverMessage: driver lookup failed")
 	assert.Contains(t, logBuf.String(), "connection refused")
+}
+
+func TestHandleCompleteRide_NoActiveRide(t *testing.T) {
+	ds := &fakeDriverStore{
+		getByTelegramIDFunc: func(ctx context.Context, telegramID int64) (*models.Driver, error) {
+			return &models.Driver{ID: "driver1"}, nil
+		},
+	}
+	var completeCalled bool
+	gs := &fakeGroupStore{
+		getActiveForDriverFunc: func(ctx context.Context, driverID string) (*models.RideGroup, error) {
+			return nil, pgx.ErrNoRows
+		},
+	}
+	gs.claimGroupFunc = func(ctx context.Context, groupID, driverID string) (int64, error) {
+		completeCalled = true
+		return 0, nil
+	}
+
+	var sentMsg string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "sendMessage") {
+			var req sendMessageRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			sentMsg = req.Text
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
+		}
+	}))
+	defer server.Close()
+
+	bot := New("token", 789, gs, ds, &fakeChatStore{}, &fakeEventPublisher{})
+	bot.baseURL = server.URL
+
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "private", ID: 100},
+			From: User{ID: 123},
+			Text: "/complete",
+		},
+	})
+
+	assert.Equal(t, "You don't have an active ride.", sentMsg)
+	assert.False(t, completeCalled)
+}
+
+func TestHandleCompleteRide_GroupTypeFiltered(t *testing.T) {
+	var completeCalled bool
+	gs := &fakeGroupStore{
+		completeRideFunc: func(ctx context.Context, groupID, driverID string) (bool, error) {
+			completeCalled = true
+			return true, nil
+		},
+	}
+	bot := New("token", 789, gs, &fakeDriverStore{}, &fakeChatStore{}, &fakeEventPublisher{})
+	
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "group", ID: 100},
+			From: User{ID: 123},
+			Text: "/complete",
+		},
+	})
+	assert.False(t, completeCalled)
+}
+
+func TestHandleCompleteRide_SuccessAndAlreadyClosed(t *testing.T) {
+	ds := &fakeDriverStore{
+		getByTelegramIDFunc: func(ctx context.Context, telegramID int64) (*models.Driver, error) {
+			return &models.Driver{ID: "driver1"}, nil
+		},
+		setStatusFunc: func(ctx context.Context, id, status string) error {
+			assert.Equal(t, "driver1", id)
+			assert.Equal(t, "online", status)
+			return nil
+		},
+	}
+	
+	firstCall := true
+	gs := &fakeGroupStore{
+		getActiveForDriverFunc: func(ctx context.Context, driverID string) (*models.RideGroup, error) {
+			return &models.RideGroup{ID: "group1"}, nil
+		},
+		completeRideFunc: func(ctx context.Context, groupID, driverID string) (bool, error) {
+			if firstCall {
+				firstCall = false
+				return true, nil
+			}
+			return false, nil
+		},
+	}
+	
+	var sentMsgs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "sendMessage") {
+			var req sendMessageRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			sentMsgs = append(sentMsgs, req.Text)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
+		}
+	}))
+	defer server.Close()
+
+	broadcastCount := 0
+	ep := &fakeEventPublisher{
+		broadcastMultiFunc: func(rooms []string, event realtime.Event) {
+			assert.Equal(t, []string{"global", "group1"}, rooms)
+			assert.Equal(t, "group:completed", event.Type)
+			broadcastCount++
+		},
+	}
+
+	bot := New("token", 789, gs, ds, &fakeChatStore{}, ep)
+	bot.baseURL = server.URL
+
+	// First call - Success
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "private", ID: 100},
+			From: User{ID: 123},
+			Text: "/complete",
+		},
+	})
+
+	assert.Equal(t, "✅ Ride completed! You are now available for new dispatch requests.", sentMsgs[0])
+	assert.Equal(t, 1, broadcastCount)
+
+	// Second call - Already closed
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "private", ID: 100},
+			From: User{ID: 123},
+			Text: "/complete",
+		},
+	})
+
+	assert.Equal(t, "Ride already closed out.", sentMsgs[1])
+	assert.Equal(t, 1, broadcastCount) // no second broadcast
 }

@@ -233,7 +233,6 @@ func (s *GroupStore) GetActiveForDriver(ctx context.Context, driverID string) (*
 		       dispatch_attempts, telegram_msg_id, created_at, updated_at
 		FROM ride_groups
 		WHERE driver_id = $1 AND status = 'assigned'
-		ORDER BY updated_at DESC
 		LIMIT 1
 	`, driverID).Scan(
 		&g.ID, &g.Status, &g.Priority, &g.RouteScore, &g.ArriveBy, &g.ExpectedDeparture,
@@ -243,6 +242,31 @@ func (s *GroupStore) GetActiveForDriver(ctx context.Context, driverID string) (*
 		return nil, fmt.Errorf("GroupStore.GetActiveForDriver: %w", err)
 	}
 	return &g, nil
+}
+
+// CompleteRide atomically marks a group and its members as completed using a CTE.
+func (s *GroupStore) CompleteRide(ctx context.Context, groupID, driverID string) (bool, error) {
+	var completed bool
+	err := s.DB.QueryRow(ctx, `
+		WITH completed AS (
+			UPDATE ride_groups
+			SET status = 'completed', completed_at = NOW(), updated_at = NOW()
+			WHERE id = $1 AND driver_id = $2 AND status = 'assigned'
+			RETURNING id
+		),
+		member_update AS (
+			UPDATE ride_requests
+			SET status = 'completed', updated_at = NOW()
+			WHERE id IN (SELECT request_id FROM group_members WHERE group_id = $1)
+			  AND EXISTS (SELECT 1 FROM completed)
+			RETURNING id
+		)
+		SELECT EXISTS (SELECT 1 FROM completed)
+	`, groupID, driverID).Scan(&completed)
+	if err != nil {
+		return false, fmt.Errorf("GroupStore.CompleteRide: %w", err)
+	}
+	return completed, nil
 }
 
 // GetMemberRequestIDs returns all request IDs belonging to a group.
