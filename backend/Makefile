@@ -96,14 +96,14 @@ test-all:
 cover:
 	go test -coverprofile=coverage.out ./internal/...
 	go tool cover -html=coverage.out -o coverage.html
-	go tool cover -func=coverage.out | grep total
+	go tool cover -func=coverage.out | grep "^total:"
 
-# Check filtered coverage (excludes boilerplate). Threshold: 30%.
-COVERAGE_THRESHOLD := 30
+# Check filtered coverage (excludes boilerplate). Threshold: 40%.
+COVERAGE_THRESHOLD := 40
 check-coverage:
 	@go test -coverprofile=coverage.out -tags=integration ./internal/... || { echo "  x  FAIL: Tests failed to build or execute. Coverage check aborted."; exit 1; }; \
 	grep -v -E "github.com/Ksalgotra1/Marshal/(cmd|internal/api|internal/config)" coverage.out > coverage_filtered.out; \
-	COVERAGE=$$(go tool cover -func=coverage_filtered.out | grep total | awk '{print $$NF}' | tr -d '%'); \
+	COVERAGE=$$(go tool cover -func=coverage_filtered.out | grep "^total:" | awk '{print $$NF}' | tr -d '%'); \
 	printf "\n  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"; \
 	printf "      Coverage Report\n"; \
 	printf "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"; \
