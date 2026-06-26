@@ -163,34 +163,26 @@ func isCommand(text, cmd string) bool {
 
 func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
 	if update.Message != nil {
-		_ = b.ds.Touch(ctx, update.Message.From.ID)
+		_ = b.ds.Touch(ctx, update.Message.From.ID) // presence
 	} else if update.CallbackQuery != nil {
-		_ = b.ds.Touch(ctx, update.CallbackQuery.From.ID)
-	}
-
-	if update.Message != nil &&
-		update.Message.Chat.Type == "private" &&
-		!strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/") &&
-		strings.TrimSpace(update.Message.Text) != "" {
-		b.handleDriverMessage(ctx, *update.Message)
-		return
-	}
-
-	if update.Message != nil && update.Message.Chat.Type == "private" && isCommand(update.Message.Text, "/start") {
-		if err := b.ds.SetTelegramChat(ctx, update.Message.From.ID, update.Message.Chat.ID); err != nil {
-			slog.Error("telegram: failed to set chat", "error", err)
-			return
-		}
-
-		req := sendMessageRequest{
-			ChatID: update.Message.Chat.ID,
-			Text:   "Registered. You'll receive ride dispatch requests here. Send /online when you're ready to drive.",
-		}
-		_, _ = b.apiPost(ctx, "sendMessage", req)
-		return
+		_ = b.ds.Touch(ctx, update.CallbackQuery.From.ID) // presence
 	}
 
 	if update.Message != nil && update.Message.Chat.Type == "private" {
+		if isCommand(update.Message.Text, "/start") {
+			if err := b.ds.SetTelegramChat(ctx, update.Message.From.ID, update.Message.Chat.ID); err != nil {
+				slog.Error("telegram: failed to set chat", "error", err)
+				return
+			}
+	
+			req := sendMessageRequest{
+				ChatID: update.Message.Chat.ID,
+				Text:   "Registered. You'll receive ride dispatch requests here. Send /online when you're ready to drive.",
+			}
+			_, _ = b.apiPost(ctx, "sendMessage", req)
+			return
+		}
+
 		if isCommand(update.Message.Text, "/complete") || isCommand(update.Message.Text, "/done") {
 			b.handleCompleteRide(ctx, *update.Message)
 			return
@@ -203,6 +195,11 @@ func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
 
 		if isCommand(update.Message.Text, "/offline") {
 			b.handleOffline(ctx, *update.Message)
+			return
+		}
+
+		if !strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/") && strings.TrimSpace(update.Message.Text) != "" {
+			b.handleDriverMessage(ctx, *update.Message)
 			return
 		}
 	}
@@ -318,7 +315,9 @@ func (b *Bot) handleCompleteRide(ctx context.Context, msg Message) {
 		return
 	}
 
-	_ = b.ds.SetStatus(ctx, driver.ID, "online")
+	// UX Decision: Automatically return the driver to 'online' (auto-ready for next dispatch) 
+	// rather than 'offline' so they don't have to manually spam /online after every single ride.
+	_ = b.ds.SetStatus(ctx, driver.ID, "online") // presence
 
 	_ = b.SendMessage(ctx, msg.Chat.ID, "✅ Ride completed! You are now available for new dispatch requests.")
 
