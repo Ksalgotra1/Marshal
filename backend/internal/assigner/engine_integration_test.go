@@ -35,7 +35,7 @@ func (s *AssignerIntegrationSuite) SetupTest() {
 	// Add an online driver so standard dispatch tests proceed
 	var driverID string
 	err := s.db.Pool.QueryRow(s.ctx, `
-		INSERT INTO drivers (name, telegram_id, status) VALUES ('Test Driver', 12345, 'online') RETURNING id
+		INSERT INTO drivers (name, telegram_id, status, last_seen_at) VALUES ('Test Driver', 12345, 'online', NOW()) RETURNING id
 	`).Scan(&driverID)
 	s.Require().NoError(err)
 }
@@ -44,7 +44,7 @@ func (s *AssignerIntegrationSuite) TestRunDispatchesGroupedPriorityQueueAndBroad
 	lowID := s.createGroup(10)
 	highID := s.createGroup(95)
 
-	Run(s.ctx, s.db.Pool, s.events, nil)
+	Run(s.ctx, s.db.Pool, s.events, nil, 15)
 
 	statuses := s.groupStatuses()
 	s.Equal("dispatching", statuses[lowID])
@@ -60,7 +60,7 @@ func (s *AssignerIntegrationSuite) TestRunCancelsMaxRetriesAndRedispatchesTimedO
 	cancelID := s.insertRawGroup("dispatching", 3, time.Now().Add(time.Hour), time.Now().Add(-10*time.Minute), 50)
 	timedOutID := s.insertRawGroup("dispatching", 1, time.Now().Add(time.Hour), time.Now().Add(-10*time.Minute), 60)
 
-	Run(s.ctx, s.db.Pool, s.events, nil)
+	Run(s.ctx, s.db.Pool, s.events, nil, 15)
 
 	statuses := s.groupStatuses()
 	s.Equal("cancelled", statuses[cancelID])
@@ -75,7 +75,7 @@ func (s *AssignerIntegrationSuite) TestAssignerPrioritizesFastTrackOverHigherSco
 	normalID := s.insertRawGroupPriority("grouped", 0, time.Now().Add(time.Hour), time.Now(), 90, models.PriorityNormal)
 	fastID := s.insertRawGroupPriority("grouped", 0, time.Now().Add(time.Hour), time.Now(), 20, models.PriorityHigh)
 
-	Run(s.ctx, s.db.Pool, s.events, nil)
+	Run(s.ctx, s.db.Pool, s.events, nil, 15)
 
 	s.Len(s.events.events, 2)
 	s.Equal("group:dispatching", s.events.events[0].Type)
@@ -99,11 +99,11 @@ func (s *AssignerIntegrationSuite) TestRunConcurrentLockContention() {
 	// Run two assigner loops concurrently
 	done := make(chan struct{})
 	go func() {
-		Run(s.ctx, s.db.Pool, s.events, nil)
+		Run(s.ctx, s.db.Pool, s.events, nil, 15)
 		done <- struct{}{}
 	}()
 	go func() {
-		Run(s.ctx, s.db.Pool, s.events, nil)
+		Run(s.ctx, s.db.Pool, s.events, nil, 15)
 		done <- struct{}{}
 	}()
 
@@ -124,7 +124,7 @@ func (s *AssignerIntegrationSuite) TestAssignerSkipsCycleWhenNoDriversOnline() {
 
 	s.createGroup(10) // Create grouped ride
 
-	Run(s.ctx, s.db.Pool, s.events, nil) // No drivers online
+	Run(s.ctx, s.db.Pool, s.events, nil, 15) // No drivers online
 
 	s.Empty(s.events.events) // Nothing should have been dispatched
 }

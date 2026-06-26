@@ -199,10 +199,10 @@ func TestScenarioC_FastTrack(t *testing.T) {
 	// Verify priority changes dispatch order
 	pub := &recordingPublisher{}
 	
-	_, err = db.Exec(context.Background(), `INSERT INTO drivers (name, telegram_id, status) VALUES ('Test Driver', 12345, 'online')`)
+	_, err = db.Exec(context.Background(), `INSERT INTO drivers (name, telegram_id, status, last_seen_at) VALUES ('Test Driver', 12345, 'online', NOW())`)
 	require.NoError(t, err)
 
-	assigner.Run(context.Background(), db, pub, nil)
+	assigner.Run(context.Background(), db, pub, nil, 15)
 
 	require.Len(t, pub.events, 2)
 	assert.Equal(t, "group:dispatching", pub.events[0].Type)

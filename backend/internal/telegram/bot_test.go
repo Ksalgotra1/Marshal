@@ -72,6 +72,7 @@ type fakeDriverStore struct {
 	getByTelegramIDFunc func(ctx context.Context, telegramID int64) (*models.Driver, error)
 	setTelegramChatFunc func(ctx context.Context, telegramID int64, chatID int64) error
 	setStatusFunc       func(ctx context.Context, id, status string) error
+	touchFunc           func(ctx context.Context, telegramID int64) error
 }
 
 func (f *fakeDriverStore) GetByTelegramID(ctx context.Context, telegramID int64) (*models.Driver, error) {
@@ -84,6 +85,13 @@ func (f *fakeDriverStore) SetTelegramChat(ctx context.Context, telegramID int64,
 
 func (f *fakeDriverStore) SetStatus(ctx context.Context, id, status string) error {
 	return f.setStatusFunc(ctx, id, status)
+}
+
+func (f *fakeDriverStore) Touch(ctx context.Context, telegramID int64) error {
+	if f.touchFunc != nil {
+		return f.touchFunc(ctx, telegramID)
+	}
+	return nil
 }
 
 func TestHandleUpdateStart(t *testing.T) {
@@ -117,7 +125,7 @@ func TestHandleUpdateStart(t *testing.T) {
 
 	bot.HandleUpdate(context.Background(), Update{
 		Message: &Message{
-			Chat: Chat{ID: 456},
+			Chat: Chat{Type: "private", ID: 456},
 			From: User{ID: 123},
 			Text: "/start",
 		},
@@ -125,6 +133,27 @@ func TestHandleUpdateStart(t *testing.T) {
 
 	assert.True(t, chatSet)
 	assert.True(t, msgSent)
+}
+
+func TestHandleUpdateStart_GroupTypeFiltered(t *testing.T) {
+	var chatSet bool
+	ds := &fakeDriverStore{
+		setTelegramChatFunc: func(ctx context.Context, telegramID, chatID int64) error {
+			chatSet = true
+			return nil
+		},
+	}
+	bot := New("token", 789, &fakeGroupStore{}, ds, &fakeChatStore{}, &fakeEventPublisher{})
+	
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "group", ID: 456},
+			From: User{ID: 123},
+			Text: "/start",
+		},
+	})
+
+	assert.False(t, chatSet)
 }
 
 func TestHandleUpdateAcceptWinsRace(t *testing.T) {
@@ -585,4 +614,93 @@ func TestHandleCompleteRide_SuccessAndAlreadyClosed(t *testing.T) {
 
 	assert.Equal(t, "Ride already closed out.", sentMsgs[1])
 	assert.Equal(t, 1, broadcastCount) // no second broadcast
+}
+
+func TestIsCommand_BoundaryCheck(t *testing.T) {
+	ds := &fakeDriverStore{
+		getByTelegramIDFunc: func(ctx context.Context, telegramID int64) (*models.Driver, error) {
+			return &models.Driver{ID: "driver1"}, nil
+		},
+	}
+	gs := &fakeGroupStore{}
+	
+	var completeCalled bool
+	gs.completeRideFunc = func(ctx context.Context, groupID, driverID string) (bool, error) {
+		completeCalled = true
+		return true, nil
+	}
+
+	bot := New("token", 789, gs, ds, &fakeChatStore{}, &fakeEventPublisher{})
+	
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "private", ID: 100},
+			From: User{ID: 123},
+			Text: "/completely",
+		},
+	})
+
+	assert.False(t, completeCalled)
+}
+
+func TestHandleOnline_BusyDriver(t *testing.T) {
+	ds := &fakeDriverStore{
+		getByTelegramIDFunc: func(ctx context.Context, telegramID int64) (*models.Driver, error) {
+			return &models.Driver{ID: "driver1", Status: "busy"}, nil
+		},
+	}
+	
+	var sentMsg string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "sendMessage") {
+			var req sendMessageRequest
+			json.NewDecoder(r.Body).Decode(&req)
+			sentMsg = req.Text
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"ok":true,"result":{"message_id":1}}`))
+		}
+	}))
+	defer server.Close()
+
+	bot := New("token", 789, &fakeGroupStore{}, ds, &fakeChatStore{}, &fakeEventPublisher{})
+	bot.baseURL = server.URL
+	
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "private", ID: 100},
+			From: User{ID: 123},
+			Text: "/online",
+		},
+	})
+
+	assert.Equal(t, "You're on an active ride — finish that first.", sentMsg)
+}
+
+func TestHandleUpdate_TouchCalled(t *testing.T) {
+	var touchCount int
+	ds := &fakeDriverStore{
+		touchFunc: func(ctx context.Context, telegramID int64) error {
+			assert.Equal(t, int64(123), telegramID)
+			touchCount++
+			return nil
+		},
+	}
+	bot := New("token", 789, &fakeGroupStore{}, ds, &fakeChatStore{}, &fakeEventPublisher{})
+	
+	bot.HandleUpdate(context.Background(), Update{
+		Message: &Message{
+			Chat: Chat{Type: "group", ID: 456},
+			From: User{ID: 123},
+			Text: "some random message",
+		},
+	})
+
+	bot.HandleUpdate(context.Background(), Update{
+		CallbackQuery: &CallbackQuery{
+			From: User{ID: 123},
+			Data: "some_data",
+		},
+	})
+
+	assert.Equal(t, 2, touchCount)
 }

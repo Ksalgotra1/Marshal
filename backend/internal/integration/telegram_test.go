@@ -108,6 +108,8 @@ func TestTelegramDispatchFlow(t *testing.T) {
 	driverTelegramID := int64(6031420785)
 	driverID, _ := ds.Register(context.Background(), "Test Driver", driverTelegramID)
 	ds.SetStatus(context.Background(), driverID, "online")
+	err := ds.Touch(context.Background(), driverTelegramID)
+	require.NoError(t, err, "touch should succeed")
 	ds.SetTelegramChat(context.Background(), driverTelegramID, -1001234)
 
 	// insert 2 fast-track requests
@@ -121,7 +123,7 @@ func TestTelegramDispatchFlow(t *testing.T) {
 	runGrouperOnce(db)
 
 	// run assigner with real bot (points at mock Telegram)
-	assigner.Run(context.Background(), db, pub, bot)
+	assigner.Run(context.Background(), db, pub, bot, 15)
 
 	// assert SendDispatch was called
 	mu.Lock()

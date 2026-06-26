@@ -26,7 +26,7 @@ type Dispatcher interface {
 // 2. Revert timed-out dispatching groups back to 'grouped'
 // 3. Pop highest-score group from priority queue
 // 4. Mark it as 'dispatching' — drivers can now claim it
-func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher, bot Dispatcher) {
+func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher, bot Dispatcher, ttlMinutes int) {
 	gs := &store.GroupStore{DB: pool}
 
 	// Step 1: Cancel groups with 3+ failed attempts
@@ -46,7 +46,13 @@ func Run(ctx context.Context, pool *pgxpool.Pool, events EventPublisher, bot Dis
 	}
 
 	ds := &store.DriverStore{DB: pool}
-	count, err := ds.CountOnline(ctx)
+	if n, err := ds.MarkStaleOffline(ctx, ttlMinutes); err != nil {
+		slog.Error("assigner: mark stale offline failed", "error", err)
+	} else if n > 0 {
+		slog.Info("assigner: marked drivers offline (stale)", "count", n)
+	}
+
+	count, err := ds.CountOnline(ctx, ttlMinutes)
 	if err != nil {
 		slog.Error("assigner: failed to count online drivers", "error", err)
 		return
@@ -147,9 +153,9 @@ func DynamicTimeout(arriveBy time.Time) time.Duration {
 }
 
 // NewProcess creates a worker.ProcessFunc with event publishing injected.
-func NewProcess(events EventPublisher, bot Dispatcher) worker.ProcessFunc {
+func NewProcess(events EventPublisher, bot Dispatcher, ttlMinutes int) worker.ProcessFunc {
 	return func(ctx context.Context, pool *pgxpool.Pool, payload []byte) error {
-		Run(ctx, pool, events, bot)
+		Run(ctx, pool, events, bot, ttlMinutes)
 		worker.Notify(ctx, pool, "assigner_wakeup")
 		return nil
 	}

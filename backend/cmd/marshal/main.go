@@ -77,13 +77,14 @@ func main() {
 		Process:  grouperProcess(pool, realtimeHub),
 	})
 
+	ttl, _ := strconv.Atoi(cfg.DriverPresenceTTL)
 	go worker.Run(ctx, worker.Config{
 		Name:     "assigner",
 		JobType:  "assign_group",
 		Channel:  "assigner_wakeup",
 		Interval: 30 * time.Second,
 		Pool:     pool,
-		Process:  assigner.NewProcess(realtimeHub, bot),
+		Process:  assigner.NewProcess(realtimeHub, bot, ttl),
 	})
 
 	h := &handlers.Handlers{Pool: pool, ServerCtx: ctx, Events: realtimeHub, WebSocket: realtimeHub}

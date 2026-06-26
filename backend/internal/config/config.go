@@ -20,6 +20,7 @@ type Config struct {
 	TelegramDriverGroup   string
 	TelegramWebhookURL    string
 	TelegramWebhookSecret string
+	DriverPresenceTTL     string // minutes, parsed where used
 }
 
 // Load reads environment variables into a Config struct.
@@ -36,6 +37,7 @@ func Load() *Config {
 		TelegramDriverGroup:   os.Getenv("TELEGRAM_DRIVER_GROUP_ID"),
 		TelegramWebhookURL:    os.Getenv("TELEGRAM_WEBHOOK_URL"),
 		TelegramWebhookSecret: os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+		DriverPresenceTTL:     getEnvOr("DRIVER_PRESENCE_TTL_MINUTES", "15"),
 	}
 }
 

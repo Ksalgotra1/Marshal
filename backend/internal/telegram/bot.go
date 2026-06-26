@@ -30,6 +30,7 @@ type DriverStorer interface {
 	GetByTelegramID(ctx context.Context, telegramID int64) (*models.Driver, error)
 	SetTelegramChat(ctx context.Context, telegramID int64, chatID int64) error
 	SetStatus(ctx context.Context, id, status string) error
+	Touch(ctx context.Context, telegramID int64) error
 }
 
 type ChatStorer interface {
@@ -155,7 +156,18 @@ func (b *Bot) AnswerCallback(ctx context.Context, callbackID, text string) error
 	return err
 }
 
+func isCommand(text, cmd string) bool {
+	text = strings.TrimSpace(text)
+	return text == cmd || strings.HasPrefix(text, cmd+" ")
+}
+
 func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
+	if update.Message != nil {
+		_ = b.ds.Touch(ctx, update.Message.From.ID)
+	} else if update.CallbackQuery != nil {
+		_ = b.ds.Touch(ctx, update.CallbackQuery.From.ID)
+	}
+
 	if update.Message != nil &&
 		update.Message.Chat.Type == "private" &&
 		!strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/") &&
@@ -164,7 +176,7 @@ func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
 		return
 	}
 
-	if update.Message != nil && strings.HasPrefix(update.Message.Text, "/start") {
+	if update.Message != nil && update.Message.Chat.Type == "private" && isCommand(update.Message.Text, "/start") {
 		if err := b.ds.SetTelegramChat(ctx, update.Message.From.ID, update.Message.Chat.ID); err != nil {
 			slog.Error("telegram: failed to set chat", "error", err)
 			return
@@ -172,17 +184,27 @@ func (b *Bot) HandleUpdate(ctx context.Context, update Update) {
 
 		req := sendMessageRequest{
 			ChatID: update.Message.Chat.ID,
-			Text:   "Registered. You'll receive ride dispatch requests here.",
+			Text:   "Registered. You'll receive ride dispatch requests here. Send /online when you're ready to drive.",
 		}
 		_, _ = b.apiPost(ctx, "sendMessage", req)
 		return
 	}
 
-	if update.Message != nil &&
-		update.Message.Chat.Type == "private" &&
-		(strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/complete") || strings.HasPrefix(strings.TrimSpace(update.Message.Text), "/done")) {
-		b.handleCompleteRide(ctx, *update.Message)
-		return
+	if update.Message != nil && update.Message.Chat.Type == "private" {
+		if isCommand(update.Message.Text, "/complete") || isCommand(update.Message.Text, "/done") {
+			b.handleCompleteRide(ctx, *update.Message)
+			return
+		}
+
+		if isCommand(update.Message.Text, "/online") {
+			b.handleOnline(ctx, *update.Message)
+			return
+		}
+
+		if isCommand(update.Message.Text, "/offline") {
+			b.handleOffline(ctx, *update.Message)
+			return
+		}
 	}
 
 	if update.CallbackQuery != nil {
@@ -303,4 +325,44 @@ func (b *Bot) handleCompleteRide(ctx context.Context, msg Message) {
 	if b.events != nil {
 		b.events.BroadcastMulti([]string{"global", group.ID}, realtime.GroupCompleted(group.ID, driver.ID))
 	}
+}
+
+func (b *Bot) handleOnline(ctx context.Context, msg Message) {
+	driver, err := b.ds.GetByTelegramID(ctx, msg.From.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			_ = b.SendMessage(ctx, msg.Chat.ID, "You are not registered as a driver.")
+			return
+		}
+		slog.Error("handleOnline: driver lookup failed", "error", err)
+		return
+	}
+
+	if driver.Status == "busy" {
+		_ = b.SendMessage(ctx, msg.Chat.ID, "You're on an active ride — finish that first.")
+		return
+	}
+
+	_ = b.ds.SetStatus(ctx, driver.ID, "online")
+	_ = b.SendMessage(ctx, msg.Chat.ID, "You're online. Dispatches will come through here.")
+}
+
+func (b *Bot) handleOffline(ctx context.Context, msg Message) {
+	driver, err := b.ds.GetByTelegramID(ctx, msg.From.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			_ = b.SendMessage(ctx, msg.Chat.ID, "You are not registered as a driver.")
+			return
+		}
+		slog.Error("handleOffline: driver lookup failed", "error", err)
+		return
+	}
+
+	if driver.Status == "busy" {
+		_ = b.SendMessage(ctx, msg.Chat.ID, "Finish your current ride before going offline.")
+		return
+	}
+
+	_ = b.ds.SetStatus(ctx, driver.ID, "offline")
+	_ = b.SendMessage(ctx, msg.Chat.ID, "You're offline.")
 }

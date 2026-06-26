@@ -21,7 +21,7 @@ func (s *DriverStore) Register(ctx context.Context, name string, telegramID int6
 	var id string
 	err := s.DB.QueryRow(ctx, `
 		INSERT INTO drivers (name, telegram_id, status)
-		VALUES ($1, $2, 'online')
+		VALUES ($1, $2, 'offline')
 		ON CONFLICT (telegram_id) DO UPDATE SET name = EXCLUDED.name
 		RETURNING id
 	`, name, telegramID).Scan(&id)
@@ -107,9 +107,32 @@ func (s *DriverStore) SetTelegramChat(ctx context.Context, telegramID int64, cha
 	return err
 }
 
-// CountOnline returns the number of online drivers.
-func (s *DriverStore) CountOnline(ctx context.Context) (int, error) {
+// Touch updates the last_seen_at timestamp for a driver.
+func (s *DriverStore) Touch(ctx context.Context, telegramID int64) error {
+	_, err := s.DB.Exec(ctx, `UPDATE drivers SET last_seen_at = NOW() WHERE telegram_id = $1`, telegramID)
+	return err
+}
+
+// MarkStaleOffline sets drivers to offline if they haven't been seen recently.
+func (s *DriverStore) MarkStaleOffline(ctx context.Context, ttlMinutes int) (int64, error) {
+	intervalStr := fmt.Sprintf("%d minutes", ttlMinutes)
+	cmd, err := s.DB.Exec(ctx, `
+		UPDATE drivers SET status = 'offline'
+		WHERE status = 'online' AND (last_seen_at IS NULL OR last_seen_at < NOW() - $1::interval)
+	`, intervalStr)
+	if err != nil {
+		return 0, err
+	}
+	return cmd.RowsAffected(), nil
+}
+
+// CountOnline returns the number of online, recently seen drivers.
+func (s *DriverStore) CountOnline(ctx context.Context, ttlMinutes int) (int, error) {
+	intervalStr := fmt.Sprintf("%d minutes", ttlMinutes)
 	var count int
-	err := s.DB.QueryRow(ctx, `SELECT COUNT(*) FROM drivers WHERE status = 'online'`).Scan(&count)
+	err := s.DB.QueryRow(ctx, `
+		SELECT COUNT(*) FROM drivers 
+		WHERE status = 'online' AND last_seen_at >= NOW() - $1::interval
+	`, intervalStr).Scan(&count)
 	return count, err
 }

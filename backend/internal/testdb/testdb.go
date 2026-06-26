@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -145,14 +146,29 @@ func applySchema(ctx context.Context, t testing.TB, pool *pgxpool.Pool) {
 	if !ok {
 		t.Fatal("locate testdb helper")
 	}
-	migrationPath := filepath.Join(filepath.Dir(file), "..", "..", "migrations", "001_create_core_schema.up.sql")
-	migration, err := os.ReadFile(migrationPath)
+	migrationsDir := filepath.Join(filepath.Dir(file), "..", "..", "migrations")
+	files, err := os.ReadDir(migrationsDir)
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("read migrations dir: %v", err)
 	}
-	if _, err := pool.Exec(ctx, string(migration)); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
-			t.Fatalf("apply migration: %v", err)
+	
+	var upFiles []string
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".up.sql") {
+			upFiles = append(upFiles, f.Name())
+		}
+	}
+	sort.Strings(upFiles)
+
+	for _, f := range upFiles {
+		migration, err := os.ReadFile(filepath.Join(migrationsDir, f))
+		if err != nil {
+			t.Fatalf("read migration %s: %v", f, err)
+		}
+		if _, err := pool.Exec(ctx, string(migration)); err != nil {
+			if !strings.Contains(err.Error(), "already exists") && !strings.Contains(err.Error(), "duplicate column name") {
+				t.Fatalf("apply migration %s: %v", f, err)
+			}
 		}
 	}
 	Truncate(ctx, t, pool)

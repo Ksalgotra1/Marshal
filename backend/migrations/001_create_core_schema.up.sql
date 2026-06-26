@@ -9,6 +9,7 @@ CREATE TABLE drivers (
     telegram_id     BIGINT UNIQUE NOT NULL,
     telegram_chat   BIGINT,
     status          TEXT NOT NULL DEFAULT 'offline',
+    last_seen_at    TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
