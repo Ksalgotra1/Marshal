@@ -8,38 +8,42 @@ Go HTTP server that powers the Marshal ride-grouping and dispatch engine. No fra
 
 ## Architecture
 
-```
-                      ┌─────────────────────────────────────────────┐
-                      │                Go HTTP Server                 │
-                      │                                               │
-  Student/Admin ──►   │  Handlers  ──►  Store (pgx)  ──►  Postgres  │
-  (REST + WS + SSE)   │                                               │
-                      │  Grouper Worker                               │
-                      │    ├── pending requests → H3 cells (res 9)   │
-                      │    ├── 3-pass spatial match                   │
-                      │    ├── score() → rerank()                    │
-                      │    └── INSERT ride_groups                     │
-                      │                                               │
-                      │  Assigner Worker                              │
-                      │    ├── SELECT ... FOR UPDATE SKIP LOCKED      │
-                      │    ├── LISTEN/NOTIFY wakeup                   │
-                      │    ├── Telegram dispatch (inline keyboard)    │
-                      │    └── 2-min pooling-delay re-enqueue         │
-                      │                                               │
-                      │  Realtime Hub                                 │
-                      │    ├── Rooms (global + per-group)             │
-                      │    ├── WebSocket clients (gorilla/websocket)  │
-                      │    └── SSE clients                            │
-                      │                                               │
-                      │  Telegram Bot                                 │
-                      │    ├── Webhook (prod) / polling (dev)         │
-                      │    ├── Inline Accept/Pass keyboard            │
-                      │    └── Chat relay (student ↔ driver)         │
-                      └─────────────────────────────────────────────┘
+*(See also: [ER Diagram](../docs/er-diagram.md) | [Ride Lifecycle](../docs/ride-lifecycle.md))*
+
+```text
+                       ┌─────────────────────────────────────────────┐
+                       │                Go HTTP Server               │
+                       │                                             │
+   Student/Admin ──►   │  Handlers  ──►  Store (pgx)  ──►  Postgres  │
+   (REST + WS + SSE)   │                                             │
+                       │  Grouper Worker                             │
+                       │    ├── pending requests → H3 cells (res 9)  │
+                       │    ├── 3-pass spatial match                 │
+                       │    ├── score() → rerank()                   │
+                       │    └── INSERT ride_groups                   │
+                       │                                             │
+                       │  Assigner Worker                            │
+                       │    ├── SELECT ... FOR UPDATE SKIP LOCKED    │
+                       │    ├── LISTEN/NOTIFY wakeup                 │
+                       │    ├── Telegram dispatch (inline keyboard)  │
+                       │    └── 2-min pooling-delay re-enqueue       │
+                       │                                             │
+                       │  Realtime Hub                               │
+                       │    ├── Rooms (global + per-group)           │
+                       │    ├── WebSocket clients (gorilla/websocket)│
+                       │    └── SSE clients                          │
+                       │                                             │
+                       │  Telegram Bot                               │
+                       │    ├── Webhook (prod) / polling (dev)       │
+                       │    ├── Inline Accept/Pass keyboard          │
+                       │    └── Chat relay (student ↔ driver)        │
+                       └─────────────────────────────────────────────┘
 ```
 
 
 ### Grouping Algorithm
+
+*(See also: [Grouping Algorithm Flowchart](../docs/grouping-algorithm.md))*
 
 ```
 pending ride_requests
@@ -67,31 +71,33 @@ pending ride_requests
 
 ### Job Queue / Worker Architecture
 
-```
+*(See also: [Telegram Dispatch Sequence](../docs/telegram-dispatch-sequence.md))*
+
+```text
   ┌──────────┐   Enqueue()    ┌────────────┐
   │ Grouper  │ ─────────────► │  jobs      │  status: queued
-  │ Assigner │               │  table     │  FOR UPDATE SKIP LOCKED
-  └──────────┘               └─────┬──────┘
-                                   │
-                    LISTEN/NOTIFY  │  or 30s ticker fallback
-                                   ▼
-                            ┌────────────┐
-                            │  Worker    │  ProcessFunc(ctx, pool, payload)
-                            │  goroutine │
-                            └────────────┘
+  │ Assigner │                │  table     │  FOR UPDATE SKIP LOCKED
+  └──────────┘                └─────┬──────┘
+                                    │
+                     LISTEN/NOTIFY  │  or 30s ticker fallback
+                                    ▼
+                             ┌────────────┐
+                             │  Worker    │  ProcessFunc(ctx, pool, payload)
+                             │  goroutine │
+                             └────────────┘
 ```
 
 
 ### Realtime Fan-out
 
-```
-                      ┌──────────────────────┐
-                      │     Realtime Hub      │
-                      │                       │
-  backend event  ──►  │  Rooms                │
-                      │    ├── "global"       │──► Admin SSE clients
-                      │    └── "group:{id}"   │──► Student WS clients
-                      └──────────────────────┘
+```text
+                       ┌──────────────────────┐
+                       │     Realtime Hub     │
+                       │                      │
+   backend event  ──►  │  Rooms               │
+                       │    ├── "global"      │──► Admin SSE clients
+                       │    └── "group:{id}"  │──► Student WS clients
+                       └──────────────────────┘
 ```
 
 Events: `group:formed`, `group:assigned`, `request:updated`, `chat:message`
