@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"crypto/subtle"
 )
 
 func NewWebhookHandler(bot *Bot, secret string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
-		if token == "" || token != secret {
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(secret)) != 1 {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}

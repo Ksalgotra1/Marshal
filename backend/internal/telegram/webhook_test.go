@@ -54,6 +54,9 @@ func TestWebhookAcceptsCorrectSecret(t *testing.T) {
 		CallbackQuery: &CallbackQuery{
 			ID:   "cb1",
 			Data: "pass:group1",
+			Message: &Message{
+				MessageID: 10,
+			},
 		},
 	}
 	body, _ := json.Marshal(update)
