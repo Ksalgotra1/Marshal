@@ -223,6 +223,9 @@ func validatePayload(p *models.CreateRequestPayload) error {
 	if p.RequesterName == "" {
 		return fmt.Errorf("requester_name is required")
 	}
+	if len(p.RequesterName) > 100 {
+		return fmt.Errorf("requester_name too long (max 100 characters)")
+	}
 	if p.PickupLat < -90 || p.PickupLat > 90 {
 		return fmt.Errorf("pickup_lat out of range")
 	}
@@ -281,6 +284,10 @@ func (h *Handlers) HandleCreateMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Content == "" {
 		api.WriteRequestError(w, r, http.StatusBadRequest, "content is required", err)
+		return
+	}
+	if len(body.Content) > 2000 {
+		api.WriteRequestError(w, r, http.StatusBadRequest, "content too long (max 2000 characters)", nil)
 		return
 	}
 
@@ -350,6 +357,10 @@ func (h *Handlers) HandleRegisterDriver(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Name == "" || body.TelegramID == 0 {
 		api.WriteRequestError(w, r, http.StatusBadRequest, "name and telegram_id are required", err)
+		return
+	}
+	if len(body.Name) > 100 {
+		api.WriteRequestError(w, r, http.StatusBadRequest, "name too long (max 100 characters)", nil)
 		return
 	}
 

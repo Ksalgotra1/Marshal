@@ -26,7 +26,7 @@ func (s *HTTPIntegrationSuite) SetupTest() {
 	h := &Handlers{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/requests", h.HandleCreateRequest)
-	mux.HandleFunc("POST /api/drivers", h.HandleRegisterDriver)
+	mux.Handle("POST /api/drivers", api.RequireAdminKey("test-admin-key")(http.HandlerFunc(h.HandleRegisterDriver)))
 	s.handler = api.RequestIDMiddleware(api.CORSMiddleware(mux))
 }
 
@@ -72,6 +72,7 @@ func (s *HTTPIntegrationSuite) TestCreateRequestValidationStopsBeforeDatabase() 
 
 func (s *HTTPIntegrationSuite) TestDriverRegistrationValidationStopsBeforeDatabase() {
 	req := httptest.NewRequest(http.MethodPost, "/api/drivers", bytes.NewBufferString(`{"name":""}`))
+	req.Header.Set("X-Admin-Key", "test-admin-key")
 	rec := httptest.NewRecorder()
 
 	s.handler.ServeHTTP(rec, req)
@@ -86,6 +87,7 @@ func (s *HTTPIntegrationSuite) TestDriverRegistrationValidationStopsBeforeDataba
 
 func (s *HTTPIntegrationSuite) TestCORSPreflightReturnsAllowedOriginAndRequestID() {
 	req := httptest.NewRequest(http.MethodOptions, "/api/requests", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
 	rec := httptest.NewRecorder()
 
 	s.handler.ServeHTTP(rec, req)

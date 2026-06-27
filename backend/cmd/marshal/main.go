@@ -22,6 +22,7 @@ import (
 	"github.com/Ksalgotra1/Marshal/internal/telegram"
 	"github.com/Ksalgotra1/Marshal/internal/worker"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/time/rate"
 )
 
 func main() {
@@ -38,8 +39,14 @@ func main() {
 	}
 	defer pool.Close()
 
+	if err := config.RunMigrations(ctx, pool, "migrations"); err != nil {
+		slog.Error("migration failed", "error", err)
+		os.Exit(1)
+	}
+	slog.Info("migrations OK")
+
 	// Realtime hub manages rooms and fans events out to transport adapters.
-	realtimeHub := realtime.NewHub()
+	realtimeHub := realtime.NewHub(cfg.AllowedOrigin)
 	go realtimeHub.Run()
 
 	var bot *telegram.Bot
@@ -92,6 +99,9 @@ func main() {
 		h.MessageSender = bot
 	}
 
+	limiter := api.NewIPRateLimiter(rate.Every(3*time.Second), 10)
+	go limiter.Cleanup(ctx, 10*time.Minute, 5*time.Minute)
+
 	// Health
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, http.StatusOK, api.JSON{
@@ -105,31 +115,31 @@ func main() {
 	mux.Handle("GET /events", &sse.Handler{Streams: realtimeHub})
 
 	// Ride requests
-	mux.HandleFunc("GET /api/requests", h.HandleListRequests)
-	mux.HandleFunc("POST /api/requests", h.HandleCreateRequest)
-	mux.HandleFunc("GET /api/requests/{id}", h.HandleGetRequest)
+	mux.Handle("GET /api/requests", jsonTimeout(http.HandlerFunc(h.HandleListRequests)))
+	mux.Handle("POST /api/requests", jsonTimeout(limiter.Middleware(http.HandlerFunc(h.HandleCreateRequest))))
+	mux.Handle("GET /api/requests/{id}", jsonTimeout(http.HandlerFunc(h.HandleGetRequest)))
 
 	// Groups
-	mux.HandleFunc("GET /api/groups", h.HandleListGroups)
-	mux.HandleFunc("GET /api/groups/open", h.HandleListOpenGroups)
-	mux.HandleFunc("GET /api/groups/{id}", h.HandleGetGroup)
-	mux.HandleFunc("POST /api/groups/{id}/join", h.HandleJoinGroup)
-	mux.HandleFunc("POST /api/groups/{id}/claim", h.HandleClaimGroup)
-	mux.HandleFunc("GET /api/groups/{id}/messages", h.HandleListMessages)
-	mux.HandleFunc("POST /api/groups/{id}/messages", h.HandleCreateMessage)
+	mux.Handle("GET /api/groups", jsonTimeout(http.HandlerFunc(h.HandleListGroups)))
+	mux.Handle("GET /api/groups/open", jsonTimeout(http.HandlerFunc(h.HandleListOpenGroups)))
+	mux.Handle("GET /api/groups/{id}", jsonTimeout(http.HandlerFunc(h.HandleGetGroup)))
+	mux.Handle("POST /api/groups/{id}/join", jsonTimeout(limiter.Middleware(http.HandlerFunc(h.HandleJoinGroup))))
+	mux.Handle("POST /api/groups/{id}/claim", jsonTimeout(limiter.Middleware(http.HandlerFunc(h.HandleClaimGroup))))
+	mux.Handle("GET /api/groups/{id}/messages", jsonTimeout(http.HandlerFunc(h.HandleListMessages)))
+	mux.Handle("POST /api/groups/{id}/messages", jsonTimeout(limiter.Middleware(http.HandlerFunc(h.HandleCreateMessage))))
 
 	// Drivers
-	mux.HandleFunc("POST /api/drivers", h.HandleRegisterDriver)
-	mux.HandleFunc("GET /api/drivers", h.HandleListDrivers)
+	mux.Handle("POST /api/drivers", jsonTimeout(limiter.Middleware(api.RequireAdminKey(cfg.AdminAPIKey)(http.HandlerFunc(h.HandleRegisterDriver)))))
+	mux.Handle("GET /api/drivers", jsonTimeout(http.HandlerFunc(h.HandleListDrivers)))
 
 	// Apply middleware stack
-	stack := api.RequestIDMiddleware(api.CORSMiddleware(mux))
+	stack := api.RequestIDMiddleware(api.CORSMiddleware(api.SecurityHeadersMiddleware(mux)))
 
 	server := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      stack,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		Addr:              ":" + cfg.Port,
+		Handler:           stack,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	// Graceful shutdown
@@ -142,6 +152,27 @@ func main() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		server.Shutdown(shutdownCtx)
+	}()
+
+	go func() {
+		time.Sleep(3 * time.Second)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		pingURL := "http://localhost:" + cfg.Port + "/healthz"
+		client := &http.Client{Timeout: 5 * time.Second}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				resp, err := client.Get(pingURL)
+				if err != nil {
+					slog.Warn("keepalive ping failed", "error", err)
+					continue
+				}
+				resp.Body.Close()
+			}
+		}
 	}()
 
 	slog.Info("marshal starting", "port", cfg.Port)
@@ -158,6 +189,10 @@ func mustParseInt64(s string) int64 {
 		os.Exit(1)
 	}
 	return n
+}
+
+func jsonTimeout(next http.Handler) http.Handler {
+	return http.TimeoutHandler(next, 10*time.Second, `{"error":"request timed out"}`)
 }
 
 // grouperProcess runs the H3 bucketing engine, then wakes the assigner.
