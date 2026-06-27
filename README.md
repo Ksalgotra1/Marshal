@@ -16,7 +16,7 @@
 ![Admin Dispatch Console](docs/screenshots/admin-dashboard.png)
 *Dispatch Console — live queue, groups board, and driver availability panel*
 
-![Student Request Form](docs/screenshots/student-request-form.png)
+<img src="docs/screenshots/student-request-form.png" alt="Student Request Form" height="300"/>
 *Student App — request form with OpenStreetMap Nominatim location search*
 
 ### Telegram Driver/Bot Interface
@@ -67,35 +67,35 @@ See `docs/diagrams/` for Excalidraw source and the [backend README](backend/READ
 
 ## Architecture Overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────────────┐
-│                         VERCEL (2×)                                   │
-│                                                                        │
-│   frontend/student            frontend/admin                          │
+│                             VERCEL (2×)                              │
+│                                                                      │
+│   frontend/student            frontend/admin                         │
 │   (Vite + React + Tailwind)   (Vite + React + Tailwind)              │
 │      WS /ws  ◄───────────────────────────────────────────────────┐   │
 │      SSE /events ◄────────────────────────────────────────────┐  │   │
 └──────────┬─────────────────────┬──────────────────────────────│──│───┘
            │ REST /api/*         │ REST /api/*                  │  │
            ▼                     ▼                              │  │
-┌──────────────────────────────────────────────────────────────│──│───┐
+┌──────────┴─────────────────────┴──────────────────────────────│──│───┐
 │                        RENDER (Docker)                        │  │   │
 │                                                               │  │   │
-│   ┌────────────────────────────────────────────────────────┐ │  │   │
-│   │  Go HTTP server  (net/http, stdlib only)               │ │  │   │
-│   │                                                        │ │  │   │
-│   │  Handlers ──► Grouper ──► H3 spatial bucketing        │ │  │   │
-│   │           ──► Assigner ──► Postgres priority queue    │ │  │   │
-│   │           ──► Worker   ──► LISTEN/NOTIFY wakeup       │ │  │   │
-│   │           ──► Realtime Hub ──► WS clients ────────────┘ │   │   │
-│   │                          ──► SSE clients ───────────────┘   │   │
-│   │           ──► Telegram Bot ──► driver group ◄── webhook     │   │
-│   └────────────────────────────────────────────────────────────┘   │
-│                                                                       │
-│   ┌─────────────────┐                                                 │
-│   │  PostgreSQL      │  ride_requests, ride_groups, group_members,    │
-│   │  (Managed)       │  drivers, jobs, chat_messages                  │
-│   └─────────────────┘                                                 │
+│   ┌────────────────────────────────────────────────────────┐  │  │   │
+│   │  Go HTTP server  (net/http, stdlib only)               │  │  │   │
+│   │                                                        │  │  │   │
+│   │  Handlers ──► Grouper ──► H3 spatial bucketing         │  │  │   │
+│   │           ──► Assigner ──► Postgres priority queue     │  │  │   │
+│   │           ──► Worker   ──► LISTEN/NOTIFY wakeup        │  │  │   │
+│   │           ──► Realtime Hub ──► WS clients ─────────────┘  │  │   │
+│   │                          ──► SSE clients ─────────────────┘  │   │
+│   │           ──► Telegram Bot ──► driver group ◄── webhook      │   │
+│   └────────────────────────────────────────────────────────┘     │   │
+│                                                                  │   │
+│   ┌─────────────────┐                                            │   │
+│   │  PostgreSQL     │  ride_requests, ride_groups, group_members,│   │
+│   │  (Managed)      │  drivers, jobs, chat_messages              │   │
+│   └─────────────────┘                                            │   │
 └──────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
