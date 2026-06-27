@@ -89,7 +89,7 @@ jobs:
         run: docker build -t marshal-backend ./backend
 
   build-frontend:
-    name: Build frontend (${{ matrix.app }})
+    name: Build frontend
     runs-on: ubuntu-latest
     needs: [test]
     strategy:
