@@ -61,7 +61,7 @@ A student submits name, pickup, dropoff, and an arrive-by time. The grouper work
 
 The assigner then pulls the best-scored group from a Postgres priority queue (`FOR UPDATE SKIP LOCKED`) and dispatches it to the Telegram driver group. A driver taps Accept or Pass on the inline keyboard. Accept assigns the group and relays that back to the student app. Pass returns the group to the pool for re-dispatch (with increasing backoff).
 
-See `docs/diagrams/` for Excalidraw source and the [backend README](backend/README.md) for the full system architecture diagram.
+See `docs/diagrams/` for Mermaid source and the [backend README](backend/README.md) for the full system architecture diagram.
 
 ---
 
