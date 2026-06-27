@@ -2,6 +2,7 @@ package assigner
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -190,11 +191,14 @@ func (s *AssignerIntegrationSuite) groupStatuses() map[string]string {
 }
 
 type recordingPublisher struct {
+	mu     sync.Mutex
 	rooms  [][]string
 	events []realtime.Event
 }
 
 func (p *recordingPublisher) BroadcastMulti(rooms []string, event realtime.Event) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.rooms = append(p.rooms, rooms)
 	p.events = append(p.events, event)
 }
