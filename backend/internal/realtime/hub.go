@@ -15,12 +15,6 @@ type StreamClient interface {
 	Close()
 }
 
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
-}
-
 type Hub struct {
 	mu            sync.RWMutex
 	rooms         map[string]map[*Client]bool
@@ -30,9 +24,10 @@ type Hub struct {
 	sseRegister   chan StreamClient
 	sseUnregister chan StreamClient
 	dirtyRooms    map[string]bool
+	allowedOrigin string
 }
 
-func NewHub() *Hub {
+func NewHub(allowedOrigin string) *Hub {
 	return &Hub{
 		rooms:         make(map[string]map[*Client]bool),
 		streams:       make(map[string]map[StreamClient]bool),
@@ -41,6 +36,7 @@ func NewHub() *Hub {
 		sseRegister:   make(chan StreamClient),
 		sseUnregister: make(chan StreamClient),
 		dirtyRooms:    make(map[string]bool),
+		allowedOrigin: allowedOrigin,
 	}
 }
 
@@ -163,12 +159,27 @@ func (h *Hub) BroadcastMulti(rooms []string, event Event) {
 	}
 }
 
+func (h *Hub) upgrader() *websocket.Upgrader {
+	return &websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		CheckOrigin: func(r *http.Request) bool {
+			if h.allowedOrigin == "" || h.allowedOrigin == "*" {
+				return true
+			}
+			return r.Header.Get("Origin") == h.allowedOrigin
+		},
+	}
+}
+
 func (h *Hub) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader().Upgrade(w, r, nil)
 	if err != nil {
 		slog.Error("ws: upgrade failed", "error", err)
 		return
 	}
+
+	conn.NetConn().SetDeadline(time.Time{})
 
 	roomParam := r.URL.Query().Get("room")
 	if roomParam == "" {
