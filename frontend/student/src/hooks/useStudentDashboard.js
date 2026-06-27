@@ -12,9 +12,11 @@ const EVENT_TYPES = new Set([
 ])
 
 async function requestJSON(path, options = {}) {
+  const baseUrl = import.meta.env.VITE_API_URL || ''
+  const url = path.startsWith('http') ? path : baseUrl + path
   let response
   try {
-    response = await fetch(path, {
+    response = await fetch(url, {
       headers: {
         'Content-Type': 'application/json',
         ...(options.headers || {}),
@@ -22,7 +24,7 @@ async function requestJSON(path, options = {}) {
       ...options,
     })
   } catch {
-    throw new Error('Backend unavailable. Start the Marshal API on port 8080, then try again.')
+    throw new Error('Backend unavailable. Start the Marshal API, then try again.')
   }
 
   if (!response.ok) {
@@ -125,7 +127,10 @@ export function useStudentDashboard() {
 
   useEffect(() => {
     const room = groupId ? `global,${groupId}` : 'global'
-    const source = new EventSource(`/events?room=${room}`)
+    const baseUrl = import.meta.env.VITE_API_URL || ''
+    const path = `/events?room=${room}`
+    const url = path.startsWith('http') ? path : baseUrl + path
+    const source = new EventSource(url)
 
     source.onmessage = event => {
       try {

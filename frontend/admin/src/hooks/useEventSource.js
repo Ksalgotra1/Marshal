@@ -10,7 +10,9 @@ export function useEventSource(path, { enabled = true, onMessage } = {}) {
   useEffect(() => {
     if (!enabled || !path) return undefined
 
-    const source = new EventSource(path)
+    const baseUrl = import.meta.env.VITE_API_URL || ''
+    const url = path.startsWith('http') ? path : baseUrl + path
+    const source = new EventSource(url)
 
     source.onmessage = (event) => {
       try {

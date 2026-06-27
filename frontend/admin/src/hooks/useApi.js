@@ -8,7 +8,9 @@ export function useApi() {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(path, {
+      const baseUrl = import.meta.env.VITE_API_URL || ''
+      const url = path.startsWith('http') ? path : baseUrl + path
+      const response = await fetch(url, {
         headers: {
           'Content-Type': 'application/json',
           ...(options.headers || {}),
