@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"encoding/json"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,7 +21,7 @@ func TestHubUnitSuite(t *testing.T) {
 }
 
 func (s *HubUnitSuite) SetupTest() {
-	s.hub = NewHub()
+	s.hub = NewHub("*")
 	go s.hub.Run()
 }
 
@@ -193,4 +194,20 @@ func (s *HubUnitSuite) TestGhostRoomBroadcast() {
 	s.NotPanics(func() {
 		s.hub.BroadcastMulti([]string{"ghost-1", "ghost-2"}, GroupCancelled("ghost-1", "test"))
 	})
+}
+
+func (s *HubUnitSuite) TestCheckOrigin() {
+	hub := NewHub("http://localhost:5173")
+	upgrader := hub.upgrader()
+
+	reqMatch, _ := http.NewRequest("GET", "/", nil)
+	reqMatch.Header.Set("Origin", "http://localhost:5173")
+	s.True(upgrader.CheckOrigin(reqMatch))
+
+	reqMismatch, _ := http.NewRequest("GET", "/", nil)
+	reqMismatch.Header.Set("Origin", "http://evil.com")
+	s.False(upgrader.CheckOrigin(reqMismatch))
+	
+	hubWild := NewHub("*")
+	s.True(hubWild.upgrader().CheckOrigin(reqMismatch))
 }

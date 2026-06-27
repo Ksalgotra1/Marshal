@@ -15,7 +15,7 @@ func BenchmarkConcurrentBroadcastBurst(b *testing.B) {
 	for _, n := range tiers {
 		b.Run(fmt.Sprintf("clients_%d", n), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				hub := NewHub()
+				hub := NewHub("*")
 				go hub.Run()
 
 				var evictedCount int32

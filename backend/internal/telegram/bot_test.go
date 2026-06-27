@@ -47,15 +47,19 @@ func (f *fakeGroupStore) CompleteRide(ctx context.Context, groupID, driverID str
 	return true, nil
 }
 
-type fakeChatStore struct {
-	addMessageFunc func(ctx context.Context, groupID, senderType, content string) (*models.ChatMessage, error)
+func (f *fakeGroupStore) PassGroup(ctx context.Context, groupID string) error {
+	return nil
 }
 
-func (f *fakeChatStore) AddMessage(ctx context.Context, groupID, senderType, content string) (*models.ChatMessage, error) {
+type fakeChatStore struct {
+	addMessageFunc func(ctx context.Context, groupID, senderType, senderName, content string) (*models.ChatMessage, error)
+}
+
+func (f *fakeChatStore) AddMessage(ctx context.Context, groupID, senderType, senderName, content string) (*models.ChatMessage, error) {
 	if f.addMessageFunc != nil {
-		return f.addMessageFunc(ctx, groupID, senderType, content)
+		return f.addMessageFunc(ctx, groupID, senderType, senderName, content)
 	}
-	return &models.ChatMessage{GroupID: groupID, SenderType: senderType, Content: content}, nil
+	return &models.ChatMessage{GroupID: groupID, SenderType: senderType, SenderName: senderName, Content: content}, nil
 }
 
 type fakeEventPublisher struct {
@@ -76,15 +80,24 @@ type fakeDriverStore struct {
 }
 
 func (f *fakeDriverStore) GetByTelegramID(ctx context.Context, telegramID int64) (*models.Driver, error) {
-	return f.getByTelegramIDFunc(ctx, telegramID)
+	if f.getByTelegramIDFunc != nil {
+		return f.getByTelegramIDFunc(ctx, telegramID)
+	}
+	return nil, pgx.ErrNoRows
 }
 
 func (f *fakeDriverStore) SetTelegramChat(ctx context.Context, telegramID int64, chatID int64) error {
-	return f.setTelegramChatFunc(ctx, telegramID, chatID)
+	if f.setTelegramChatFunc != nil {
+		return f.setTelegramChatFunc(ctx, telegramID, chatID)
+	}
+	return nil
 }
 
 func (f *fakeDriverStore) SetStatus(ctx context.Context, id, status string) error {
-	return f.setStatusFunc(ctx, id, status)
+	if f.setStatusFunc != nil {
+		return f.setStatusFunc(ctx, id, status)
+	}
+	return nil
 }
 
 func (f *fakeDriverStore) Touch(ctx context.Context, telegramID int64) error {
@@ -92,6 +105,10 @@ func (f *fakeDriverStore) Touch(ctx context.Context, telegramID int64) error {
 		return f.touchFunc(ctx, telegramID)
 	}
 	return nil
+}
+
+func (f *fakeDriverStore) Register(ctx context.Context, username string, telegramID int64) (string, error) {
+	return "fake-driver-id", nil
 }
 
 func TestHandleUpdateStart(t *testing.T) {
@@ -265,7 +282,7 @@ func TestHandleUpdatePass(t *testing.T) {
 
 	var answered bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "answerCallbackQuery") {
+		if strings.Contains(r.URL.Path, "answerCallbackQuery") || strings.Contains(r.URL.Path, "editMessageText") {
 			answered = true
 			w.WriteHeader(http.StatusOK)
 		} else {
@@ -282,6 +299,9 @@ func TestHandleUpdatePass(t *testing.T) {
 			ID:   "cb1",
 			From: User{ID: 123},
 			Data: "pass:group1",
+			Message: &Message{
+				MessageID: 55,
+			},
 		},
 	})
 
@@ -402,7 +422,7 @@ func TestHandleDriverMessage_Success(t *testing.T) {
 	}
 	var msgAdded bool
 	cs := &fakeChatStore{
-		addMessageFunc: func(ctx context.Context, groupID, senderType, content string) (*models.ChatMessage, error) {
+		addMessageFunc: func(ctx context.Context, groupID, senderType, senderName, content string) (*models.ChatMessage, error) {
 			assert.Equal(t, "group1", groupID)
 			assert.Equal(t, "driver", senderType)
 			assert.Equal(t, "Hello student", content)

@@ -190,6 +190,7 @@ func TestScenarioC_FastTrack(t *testing.T) {
 
 	err := runGrouperOnce(db)
 	require.NoError(t, err)
+	_, _ = db.Exec(context.Background(), "UPDATE ride_groups SET created_at = NOW() - interval '5 minutes'")
 
 	gs := &store.GroupStore{DB: db}
 	groups, err := gs.ListOpen(context.Background())

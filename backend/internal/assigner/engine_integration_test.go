@@ -148,6 +148,7 @@ func (s *AssignerIntegrationSuite) createGroup(score float64) string {
 	}
 	id, err := (&store.GroupStore{DB: s.db.Pool}).Create(s.ctx, members, score, models.PriorityNormal)
 	s.Require().NoError(err)
+	_, _ = s.db.Pool.Exec(s.ctx, `UPDATE ride_groups SET created_at = NOW() - interval '5 minutes' WHERE id = $1`, id)
 	return id
 }
 
@@ -158,6 +159,7 @@ func (s *AssignerIntegrationSuite) insertRawGroup(status string, attempts int, a
 		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id
 	`, status, attempts, arriveBy, updatedAt, updatedAt, score).Scan(&id))
+	_, _ = s.db.Pool.Exec(s.ctx, `UPDATE ride_groups SET created_at = NOW() - interval '5 minutes' WHERE id = $1`, id)
 	return id
 }
 
@@ -168,6 +170,7 @@ func (s *AssignerIntegrationSuite) insertRawGroupPriority(status string, attempt
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
 		RETURNING id
 	`, status, attempts, arriveBy, updatedAt, updatedAt, score, priority).Scan(&id))
+	_, _ = s.db.Pool.Exec(s.ctx, `UPDATE ride_groups SET created_at = NOW() - interval '5 minutes' WHERE id = $1`, id)
 	return id
 }
 

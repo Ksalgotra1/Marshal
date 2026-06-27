@@ -121,6 +121,7 @@ func TestTelegramDispatchFlow(t *testing.T) {
 
 	// run grouper to form the group
 	runGrouperOnce(db)
+	_, _ = db.Exec(context.Background(), "UPDATE ride_groups SET created_at = NOW() - interval '5 minutes'")
 
 	// run assigner with real bot (points at mock Telegram)
 	assigner.Run(context.Background(), db, pub, bot, 15)

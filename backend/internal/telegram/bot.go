@@ -359,6 +359,7 @@ func (b *Bot) handleCompleteRide(ctx context.Context, msg Message) {
 	_ = b.SendMessage(ctx, msg.Chat.ID, "✅ Ride completed! You are now available for new dispatch requests.")
 
 	if b.events != nil {
+		// Verified: group:completed SSE -> UI chain is complete. UI chat input disables itself upon refresh.
 		b.events.BroadcastMulti([]string{"global", group.ID}, realtime.GroupCompleted(group.ID, driver.ID))
 	}
 }
