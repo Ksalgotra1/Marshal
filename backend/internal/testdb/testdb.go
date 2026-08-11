@@ -10,11 +10,16 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// truncateMu serialises TRUNCATE calls across parallel test packages
+// that share the same CI database to avoid deadlocks.
+var truncateMu sync.Mutex
 
 const (
 	dbUser     = "marshal_test"
@@ -60,6 +65,8 @@ func Start(t testing.TB) *Instance {
 
 func Truncate(ctx context.Context, t testing.TB, pool *pgxpool.Pool) {
 	t.Helper()
+	truncateMu.Lock()
+	defer truncateMu.Unlock()
 	_, err := pool.Exec(ctx, `
 		TRUNCATE chat_messages, group_members, ride_groups, ride_requests, drivers, jobs
 		RESTART IDENTITY CASCADE

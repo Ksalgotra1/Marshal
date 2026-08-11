@@ -21,6 +21,9 @@ import (
 
 func setupTestDB(t *testing.T) (*pgxpool.Pool, func()) {
 	db := testdb.Start(t)
+	// Truncate at test start (not just schema time) so data from
+	// concurrent test packages in the shared CI DB doesn't leak in.
+	testdb.Truncate(context.Background(), t, db.Pool)
 	return db.Pool, func() {}
 }
 
