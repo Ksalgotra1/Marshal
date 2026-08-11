@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+// Stable ref wrapper so callbacks can be used inside effects without causing re-subscriptions
+function useStableCallback(fn) {
+  const ref = useRef(fn)
+  ref.current = fn
+  return useCallback((...args) => ref.current(...args), [])
+}
+
 const STORAGE_KEY = 'marshal.student.requestId'
 const EVENT_TYPES = new Set([
   'request:created',
@@ -91,7 +98,7 @@ export function useStudentDashboard() {
     })
   }, [])
 
-  const refresh = useCallback(async () => {
+  const refreshImpl = useCallback(async () => {
     setIsRefreshing(true)
     try {
       const [openGroups, request] = await Promise.all([
@@ -116,15 +123,16 @@ export function useStudentDashboard() {
     }
   }, [requestId])
 
-  useEffect(() => {
-    const firstRun = setTimeout(refresh, 0)
-    const timer = setInterval(refresh, 30000)
-    return () => {
-      clearTimeout(firstRun)
-      clearInterval(timer)
-    }
-  }, [refresh])
+  // Stable reference so effects don't re-subscribe on every render
+  const refresh = useStableCallback(refreshImpl)
 
+  useEffect(() => {
+    refreshImpl()
+    const timer = setInterval(refreshImpl, 30000)
+    return () => clearInterval(timer)
+  }, [refreshImpl])
+
+  // SSE subscription — only reconnects when groupId changes, NOT on refresh changes
   useEffect(() => {
     const room = groupId ? `global,${groupId}` : 'global'
     const baseUrl = import.meta.env.VITE_API_URL || ''
@@ -168,7 +176,7 @@ export function useStudentDashboard() {
       cancelled = true
       source.close()
     }
-  }, [refresh, groupId, mergeMessages])
+  }, [groupId, mergeMessages, refresh])
 
   const sendChatMessage = useCallback(async (content) => {
     if (!groupId) return false
@@ -189,7 +197,7 @@ export function useStudentDashboard() {
     } finally {
       setIsChatSending(false)
     }
-  }, [groupId, activeRequest?.id, mergeMessages])
+  }, [groupId, activeRequest, mergeMessages])
 
   const submitRequest = useCallback(async payload => {
     setIsBusy(true)

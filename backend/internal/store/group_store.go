@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Ksalgotra1/Marshal/internal/models"
@@ -75,6 +76,62 @@ func (s *GroupStore) ListOpen(ctx context.Context) ([]models.RideGroup, error) {
 	}
 	defer rows.Close()
 	return scanGroups(rows)
+}
+
+func maskRequesterName(name string) string {
+	parts := strings.Fields(strings.TrimSpace(name))
+	if len(parts) == 0 {
+		return "Rider"
+	}
+	var masked []string
+	for _, p := range parts {
+		if len(p) > 0 {
+			masked = append(masked, string([]rune(p)[0])+".")
+		}
+	}
+	return strings.Join(masked, " ")
+}
+
+// ListOpenWithMembers returns open groups along with their member ride requests (with masked names for privacy).
+func (s *GroupStore) ListOpenWithMembers(ctx context.Context) ([]GroupDetail, error) {
+	groups, err := s.ListOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	details := make([]GroupDetail, len(groups))
+	for i, g := range groups {
+		rows, err := s.DB.Query(ctx, `
+			SELECT rr.id, rr.requester_name, rr.pickup_lat, rr.pickup_lng,
+			       rr.dropoff_lat, rr.dropoff_lng, rr.pickup_h3, rr.dropoff_h3,
+			       rr.arrive_by, rr.status, rr.created_at, rr.updated_at
+			FROM ride_requests rr
+			JOIN group_members gm ON rr.id = gm.request_id
+			WHERE gm.group_id = $1
+		`, g.ID)
+		var members []models.RideRequest
+		if err == nil {
+			for rows.Next() {
+				var r models.RideRequest
+				if err := rows.Scan(
+					&r.ID, &r.RequesterName, &r.PickupLat, &r.PickupLng,
+					&r.DropoffLat, &r.DropoffLng, &r.PickupH3, &r.DropoffH3,
+					&r.ArriveBy, &r.Status, &r.CreatedAt, &r.UpdatedAt,
+				); err == nil {
+					r.RequesterName = maskRequesterName(r.RequesterName)
+					members = append(members, r)
+				}
+			}
+			rows.Close()
+		}
+		if members == nil {
+			members = []models.RideRequest{}
+		}
+		details[i] = GroupDetail{
+			Group:   g,
+			Members: members,
+		}
+	}
+	return details, nil
 }
 
 // ListFiltered returns groups with optional status filter and limit.

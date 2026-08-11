@@ -154,7 +154,7 @@ func (h *Handlers) HandleGetGroup(w http.ResponseWriter, r *http.Request) {
 // HandleListOpenGroups handles GET /api/groups/open (student browse).
 func (h *Handlers) HandleListOpenGroups(w http.ResponseWriter, r *http.Request) {
 	s := &store.GroupStore{DB: h.Pool}
-	groups, err := s.ListOpen(r.Context())
+	groups, err := s.ListOpenWithMembers(r.Context())
 	if err != nil {
 		api.WriteRequestError(w, r, http.StatusInternalServerError, "failed to list open groups", err)
 		return
