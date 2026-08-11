@@ -51,17 +51,17 @@ jobs:
 
       - name: Unit tests
         working-directory: backend
-        run: go test -race ./...
+        run: go test -race -p 1 ./...
 
       - name: Integration tests
         working-directory: backend
-        run: go test -tags=integration -race -count=1 -timeout 180s ./...
+        run: go test -tags=integration -race -count=1 -p 1 -timeout 180s ./...
 
       - name: Coverage check (threshold 40%)
         working-directory: backend
         run: |
           set -euo pipefail
-          go test -coverprofile=coverage.out -tags=integration -count=1 ./internal/...
+          go test -coverprofile=coverage.out -tags=integration -count=1 -p 1 ./internal/...
           grep -v -E "github.com/Ksalgotra1/Marshal/(cmd|internal/api|internal/config)" \
             coverage.out > coverage_filtered.out
           COVERAGE=$(go tool cover -func=coverage_filtered.out | grep "^total:" | awk '{print $NF}' | tr -d '%')
