@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import campusMapImg from '/Users/krishnasalgotra/.gemini/antigravity-ide/brain/0b30e634-00ee-4cfe-833f-86d699cc5f21/campus_map_illustration_1786385272807.png'
+const campusMapImg = '/images/stitch-campus-map.jpg'
 
 const FEATURES = [
   {
